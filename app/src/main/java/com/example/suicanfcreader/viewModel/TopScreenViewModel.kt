@@ -18,6 +18,7 @@ import com.example.suicanfcreader.lib.SuicaReader
 import com.example.suicanfcreader.model.AppThemeMode
 import com.example.suicanfcreader.model.Card
 import com.example.suicanfcreader.model.SuicaCardSummary
+import com.example.suicanfcreader.widget.BalanceWidgetProvider
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -30,7 +31,7 @@ class TopScreenViewModel(
 ) : ViewModel() {
 
     private val appContext = context.applicationContext
-    private val nfcAdapter: NfcAdapter? = NfcAdapter.getDefaultAdapter(context)
+    private val nfcAdapter: NfcAdapter? = NfcAdapter.getDefaultAdapter(appContext)
     private val preferences: SharedPreferences =
         appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -94,6 +95,26 @@ class TopScreenViewModel(
         MutableLiveData(preferences.getString(KEY_DELETE_BUTTON_COLOR, DEFAULT_DELETE_BUTTON_COLOR) ?: DEFAULT_DELETE_BUTTON_COLOR)
     val deleteButtonColorHex: LiveData<String> = _deleteButtonColorHex
 
+    private val _balanceBackgroundColorHex =
+        MutableLiveData(preferences.getString(KEY_BALANCE_BACKGROUND_COLOR, DEFAULT_BALANCE_BACKGROUND_COLOR) ?: DEFAULT_BALANCE_BACKGROUND_COLOR)
+    val balanceBackgroundColorHex: LiveData<String> = _balanceBackgroundColorHex
+
+    private val _otherCardBackgroundColorHex =
+        MutableLiveData(preferences.getString(KEY_OTHER_CARD_BACKGROUND_COLOR, DEFAULT_OTHER_CARD_BACKGROUND_COLOR) ?: DEFAULT_OTHER_CARD_BACKGROUND_COLOR)
+    val otherCardBackgroundColorHex: LiveData<String> = _otherCardBackgroundColorHex
+
+    private val _widgetBackgroundColorHex =
+        MutableLiveData(preferences.getString(KEY_WIDGET_BACKGROUND_COLOR, DEFAULT_WIDGET_BACKGROUND_COLOR) ?: DEFAULT_WIDGET_BACKGROUND_COLOR)
+    val widgetBackgroundColorHex: LiveData<String> = _widgetBackgroundColorHex
+
+    private val _summaryBackgroundImageUri =
+        MutableLiveData(preferences.getString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, null))
+    val summaryBackgroundImageUri: LiveData<String?> = _summaryBackgroundImageUri
+
+    private val _widgetBackgroundImageUri =
+        MutableLiveData(preferences.getString(KEY_WIDGET_BACKGROUND_IMAGE_URI, null))
+    val widgetBackgroundImageUri: LiveData<String?> = _widgetBackgroundImageUri
+
     private val _appTitle =
         MutableLiveData(preferences.getString(KEY_APP_TITLE, DEFAULT_APP_TITLE) ?: DEFAULT_APP_TITLE)
     val appTitle: LiveData<String> = _appTitle
@@ -116,11 +137,45 @@ class TopScreenViewModel(
         MutableLiveData(preferences.getBoolean(KEY_SHOW_CARD_BALANCES, true))
     val showCardBalances: LiveData<Boolean> = _showCardBalances
 
+    private val _useModernUi = MutableLiveData(preferences.getBoolean(KEY_USE_MODERN_UI, true))
+    val useModernUi: LiveData<Boolean> = _useModernUi
+
+    private val _showBottomTabLabels =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_BOTTOM_TAB_LABELS, true))
+    val showBottomTabLabels: LiveData<Boolean> = _showBottomTabLabels
+
+    private val _showDeleteButton =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_DELETE_BUTTON, true))
+    val showDeleteButton: LiveData<Boolean> = _showDeleteButton
+
+    private val _showReadNotice =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_READ_NOTICE, true))
+    val showReadNotice: LiveData<Boolean> = _showReadNotice
+
+    private val _showStatisticsButton =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_STATISTICS_BUTTON, true))
+    val showStatisticsButton: LiveData<Boolean> = _showStatisticsButton
+
+    private val _showPaletteIcon =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_PALETTE_ICON, true))
+    val showPaletteIcon: LiveData<Boolean> = _showPaletteIcon
+
+    private val _showMoreMenu =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_MORE_MENU, true))
+    val showMoreMenu: LiveData<Boolean> = _showMoreMenu
+
+    private val _statsDialogVisible = MutableLiveData(false)
+    val statsDialogVisible: LiveData<Boolean> = _statsDialogVisible
+
     private val _settingsDialogVisible = MutableLiveData(false)
     val settingsDialogVisible: LiveData<Boolean> = _settingsDialogVisible
 
     private val _featureFlags = MutableLiveData(loadFeatureFlags())
     val featureFlags: LiveData<Map<String, Boolean>> = _featureFlags
+
+    init {
+        BalanceWidgetProvider.requestUpdate(appContext)
+    }
 
     fun enableNfcForegroundDispatch(activity: Activity) {
         nfcAdapter?.let { adapter ->
@@ -136,6 +191,7 @@ class TopScreenViewModel(
                         activity,
                         0,
                         Intent(activity, activity.javaClass).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                        // NFC dispatch adds EXTRA_TAG to this intent, so immutable cannot be used here.
                         PendingIntent.FLAG_MUTABLE
                     )
                 adapter.enableForegroundDispatch(activity, pendingIntent, nfcIntentFilter, null)
@@ -150,30 +206,29 @@ class TopScreenViewModel(
     }
 
     fun handleNfcIntent(intent: Intent?, context: Context) {
-        intent?.let {
-            if (intent.action in listOf(
-                    NfcAdapter.ACTION_TAG_DISCOVERED,
-                    NfcAdapter.ACTION_TECH_DISCOVERED,
-                    NfcAdapter.ACTION_NDEF_DISCOVERED
-                )
-            ) {
-                val tag = it.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
-                tag?.let {
-                    viewModelScope.launch {
-                        val data = readTagData(tag, context)
-                        _nfcData.value = data.rawText
-                        _latestCards.value = data.cards
-                        if (data.cards.isNotEmpty()) {
-                            val mergedHistory = mergeHistory(data.cards, loadHistory())
-                            saveHistory(mergedHistory)
-                            _readCardIds.value = _readCardIds.value.orEmpty() + data.cardId
-                            setSelectedCard(data.cardId)
-                            refreshDerivedState(mergedHistory, data.cardId)
-                        }
-                        _isDataRefreshed.value = true
-                    }
-                }
+        val action = intent?.action ?: return
+        if (action !in NFC_ACTIONS) return
+
+        @Suppress("DEPRECATION")
+        val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG) ?: return
+        if (tag.id?.size != FELICA_ID_LENGTH || NfcF.get(tag) == null) {
+            _nfcData.value = "交通系ICカードとして読み取れませんでした"
+            _isDataRefreshed.value = true
+            return
+        }
+
+        viewModelScope.launch {
+            val data = readTagData(tag, context)
+            _nfcData.value = data.rawText
+            _latestCards.value = data.cards
+            if (data.cards.isNotEmpty()) {
+                val mergedHistory = mergeHistory(data.cards, loadHistory())
+                saveHistory(mergedHistory)
+                _readCardIds.value = _readCardIds.value.orEmpty() + data.cardId
+                setSelectedCard(data.cardId)
+                refreshDerivedState(mergedHistory, data.cardId)
             }
+            _isDataRefreshed.value = true
         }
     }
 
@@ -210,7 +265,11 @@ class TopScreenViewModel(
     }
 
     fun setSummaryBackgroundColor(hex: String) {
-        saveColor(KEY_SUMMARY_BACKGROUND_COLOR, hex) { _summaryBackgroundColorHex.value = it }
+        saveColor(KEY_SUMMARY_BACKGROUND_COLOR, hex) {
+            _summaryBackgroundColorHex.value = it
+            preferences.edit().putString(KEY_BALANCE_BACKGROUND_COLOR, it).apply()
+            _balanceBackgroundColorHex.value = it
+        }
     }
 
     fun setNoticeBackgroundColor(hex: String) {
@@ -219,6 +278,32 @@ class TopScreenViewModel(
 
     fun setDeleteButtonColor(hex: String) {
         saveColor(KEY_DELETE_BUTTON_COLOR, hex) { _deleteButtonColorHex.value = it }
+    }
+
+    fun setBalanceBackgroundColor(hex: String) {
+        saveColor(KEY_BALANCE_BACKGROUND_COLOR, hex) { _balanceBackgroundColorHex.value = it }
+    }
+
+    fun setOtherCardBackgroundColor(hex: String) {
+        saveColor(KEY_OTHER_CARD_BACKGROUND_COLOR, hex) { _otherCardBackgroundColorHex.value = it }
+    }
+
+    fun setWidgetBackgroundColor(hex: String) {
+        saveColor(KEY_WIDGET_BACKGROUND_COLOR, hex) {
+            _widgetBackgroundColorHex.value = it
+            BalanceWidgetProvider.requestUpdate(appContext)
+        }
+    }
+
+    fun setSummaryBackgroundImageUri(uri: String?) {
+        preferences.edit().putString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, uri).apply()
+        _summaryBackgroundImageUri.value = uri
+    }
+
+    fun setWidgetBackgroundImageUri(uri: String?) {
+        preferences.edit().putString(KEY_WIDGET_BACKGROUND_IMAGE_URI, uri).apply()
+        _widgetBackgroundImageUri.value = uri
+        BalanceWidgetProvider.requestUpdate(appContext)
     }
 
     fun setUseSearchIcon(enabled: Boolean) {
@@ -251,6 +336,49 @@ class TopScreenViewModel(
         _showCardBalances.value = show
     }
 
+    fun setUseModernUi(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_USE_MODERN_UI, enabled).apply()
+        _useModernUi.value = enabled
+    }
+
+    fun setShowBottomTabLabels(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_BOTTOM_TAB_LABELS, show).apply()
+        _showBottomTabLabels.value = show
+    }
+
+    fun setShowDeleteButton(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_DELETE_BUTTON, show).apply()
+        _showDeleteButton.value = show
+    }
+
+    fun setShowReadNotice(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_READ_NOTICE, show).apply()
+        _showReadNotice.value = show
+    }
+
+    fun setShowStatisticsButton(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_STATISTICS_BUTTON, show).apply()
+        _showStatisticsButton.value = show
+    }
+
+    fun setShowPaletteIcon(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_PALETTE_ICON, show).apply()
+        _showPaletteIcon.value = show
+    }
+
+    fun setShowMoreMenu(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_MORE_MENU, show).apply()
+        _showMoreMenu.value = show
+    }
+
+    fun showStatsDialog() {
+        _statsDialogVisible.value = true
+    }
+
+    fun dismissStatsDialog() {
+        _statsDialogVisible.value = false
+    }
+
     fun showSettingsDialog() {
         _settingsDialogVisible.value = true
     }
@@ -276,6 +404,7 @@ class TopScreenViewModel(
             aliases[cardId] = alias.trim()
         }
         saveAliases(aliases)
+        BalanceWidgetProvider.requestUpdate(appContext)
         refreshDerivedState(loadHistory(), cardId)
     }
 
@@ -384,18 +513,33 @@ class TopScreenViewModel(
             put("summaryBackgroundColor", _summaryBackgroundColorHex.value ?: DEFAULT_SUMMARY_BACKGROUND_COLOR)
             put("noticeBackgroundColor", _noticeBackgroundColorHex.value ?: DEFAULT_NOTICE_BACKGROUND_COLOR)
             put("deleteButtonColor", _deleteButtonColorHex.value ?: DEFAULT_DELETE_BUTTON_COLOR)
+            put("balanceBackgroundColor", _balanceBackgroundColorHex.value ?: DEFAULT_BALANCE_BACKGROUND_COLOR)
+            put("otherCardBackgroundColor", _otherCardBackgroundColorHex.value ?: DEFAULT_OTHER_CARD_BACKGROUND_COLOR)
+            put("widgetBackgroundColor", _widgetBackgroundColorHex.value ?: DEFAULT_WIDGET_BACKGROUND_COLOR)
+            put("summaryBackgroundImageUri", _summaryBackgroundImageUri.value)
+            put("widgetBackgroundImageUri", _widgetBackgroundImageUri.value)
             put("useSearchIcon", _useSearchIcon.value ?: true)
             put("showLegacySearchBar", _showLegacySearchBar.value ?: false)
             put("showCardBalances", _showCardBalances.value ?: true)
+            put("useModernUi", _useModernUi.value ?: true)
+            put("showBottomTabLabels", _showBottomTabLabels.value ?: true)
+            put("showDeleteButton", _showDeleteButton.value ?: true)
+            put("showReadNotice", _showReadNotice.value ?: true)
+            put("showStatisticsButton", _showStatisticsButton.value ?: true)
+            put("showPaletteIcon", _showPaletteIcon.value ?: true)
+            put("showMoreMenu", _showMoreMenu.value ?: true)
             put("features", JSONObject(preferences.getString(KEY_FEATURE_FLAGS, "{}") ?: "{}"))
         }.toString(2)
     }
 
     fun importBackupJson(rawJson: String): Boolean {
         return runCatching {
+            require(rawJson.length <= MAX_BACKUP_JSON_LENGTH) { "Backup is too large" }
             val obj = JSONObject(rawJson)
+            val history = obj.optJSONArray("history") ?: JSONArray()
+            require(history.length() <= MAX_HISTORY_ITEMS) { "Too many history records" }
             preferences.edit()
-                .putString(KEY_HISTORY, obj.optJSONArray("history")?.toString() ?: "[]")
+                .putString(KEY_HISTORY, history.toString())
                 .putString(KEY_CARD_ALIASES, obj.optJSONObject("cardAliases")?.toString() ?: "{}")
                 .putString(KEY_THEME_MODE, obj.optString("themeMode", AppThemeMode.AMOLED.name))
                 .putString(KEY_APP_TITLE, obj.optString("appTitle", DEFAULT_APP_TITLE))
@@ -404,9 +548,21 @@ class TopScreenViewModel(
                 .putString(KEY_SUMMARY_BACKGROUND_COLOR, obj.optString("summaryBackgroundColor", DEFAULT_SUMMARY_BACKGROUND_COLOR))
                 .putString(KEY_NOTICE_BACKGROUND_COLOR, obj.optString("noticeBackgroundColor", DEFAULT_NOTICE_BACKGROUND_COLOR))
                 .putString(KEY_DELETE_BUTTON_COLOR, obj.optString("deleteButtonColor", DEFAULT_DELETE_BUTTON_COLOR))
+                .putString(KEY_BALANCE_BACKGROUND_COLOR, obj.optString("balanceBackgroundColor", DEFAULT_BALANCE_BACKGROUND_COLOR))
+                .putString(KEY_OTHER_CARD_BACKGROUND_COLOR, obj.optString("otherCardBackgroundColor", DEFAULT_OTHER_CARD_BACKGROUND_COLOR))
+                .putString(KEY_WIDGET_BACKGROUND_COLOR, obj.optString("widgetBackgroundColor", DEFAULT_WIDGET_BACKGROUND_COLOR))
+                .putString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, obj.optString("summaryBackgroundImageUri").ifBlank { null })
+                .putString(KEY_WIDGET_BACKGROUND_IMAGE_URI, obj.optString("widgetBackgroundImageUri").ifBlank { null })
                 .putBoolean(KEY_USE_SEARCH_ICON, obj.optBoolean("useSearchIcon", true))
                 .putBoolean(KEY_SHOW_LEGACY_SEARCH_BAR, obj.optBoolean("showLegacySearchBar", false))
                 .putBoolean(KEY_SHOW_CARD_BALANCES, obj.optBoolean("showCardBalances", true))
+                .putBoolean(KEY_USE_MODERN_UI, obj.optBoolean("useModernUi", true))
+                .putBoolean(KEY_SHOW_BOTTOM_TAB_LABELS, obj.optBoolean("showBottomTabLabels", true))
+                .putBoolean(KEY_SHOW_DELETE_BUTTON, obj.optBoolean("showDeleteButton", true))
+                .putBoolean(KEY_SHOW_READ_NOTICE, obj.optBoolean("showReadNotice", true))
+                .putBoolean(KEY_SHOW_STATISTICS_BUTTON, obj.optBoolean("showStatisticsButton", true))
+                .putBoolean(KEY_SHOW_PALETTE_ICON, obj.optBoolean("showPaletteIcon", true))
+                .putBoolean(KEY_SHOW_MORE_MENU, obj.optBoolean("showMoreMenu", true))
                 .putString(KEY_FEATURE_FLAGS, obj.optJSONObject("features")?.toString() ?: "{}")
                 .apply()
             _themeMode.value = AppThemeMode.fromName(preferences.getString(KEY_THEME_MODE, null))
@@ -416,11 +572,24 @@ class TopScreenViewModel(
             _summaryBackgroundColorHex.value = preferences.getString(KEY_SUMMARY_BACKGROUND_COLOR, DEFAULT_SUMMARY_BACKGROUND_COLOR) ?: DEFAULT_SUMMARY_BACKGROUND_COLOR
             _noticeBackgroundColorHex.value = preferences.getString(KEY_NOTICE_BACKGROUND_COLOR, DEFAULT_NOTICE_BACKGROUND_COLOR) ?: DEFAULT_NOTICE_BACKGROUND_COLOR
             _deleteButtonColorHex.value = preferences.getString(KEY_DELETE_BUTTON_COLOR, DEFAULT_DELETE_BUTTON_COLOR) ?: DEFAULT_DELETE_BUTTON_COLOR
+            _balanceBackgroundColorHex.value = preferences.getString(KEY_BALANCE_BACKGROUND_COLOR, DEFAULT_BALANCE_BACKGROUND_COLOR) ?: DEFAULT_BALANCE_BACKGROUND_COLOR
+            _otherCardBackgroundColorHex.value = preferences.getString(KEY_OTHER_CARD_BACKGROUND_COLOR, DEFAULT_OTHER_CARD_BACKGROUND_COLOR) ?: DEFAULT_OTHER_CARD_BACKGROUND_COLOR
+            _widgetBackgroundColorHex.value = preferences.getString(KEY_WIDGET_BACKGROUND_COLOR, DEFAULT_WIDGET_BACKGROUND_COLOR) ?: DEFAULT_WIDGET_BACKGROUND_COLOR
+            _summaryBackgroundImageUri.value = preferences.getString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, null)
+            _widgetBackgroundImageUri.value = preferences.getString(KEY_WIDGET_BACKGROUND_IMAGE_URI, null)
             _useSearchIcon.value = preferences.getBoolean(KEY_USE_SEARCH_ICON, true)
             _showLegacySearchBar.value = preferences.getBoolean(KEY_SHOW_LEGACY_SEARCH_BAR, false)
             _showCardBalances.value = preferences.getBoolean(KEY_SHOW_CARD_BALANCES, true)
+            _useModernUi.value = preferences.getBoolean(KEY_USE_MODERN_UI, true)
+            _showBottomTabLabels.value = preferences.getBoolean(KEY_SHOW_BOTTOM_TAB_LABELS, true)
+            _showDeleteButton.value = preferences.getBoolean(KEY_SHOW_DELETE_BUTTON, true)
+            _showReadNotice.value = preferences.getBoolean(KEY_SHOW_READ_NOTICE, true)
+            _showStatisticsButton.value = preferences.getBoolean(KEY_SHOW_STATISTICS_BUTTON, true)
+            _showPaletteIcon.value = preferences.getBoolean(KEY_SHOW_PALETTE_ICON, true)
+            _showMoreMenu.value = preferences.getBoolean(KEY_SHOW_MORE_MENU, true)
             _featureFlags.value = loadFeatureFlags()
             refreshDerivedState(loadHistory(), _selectedCardId.value)
+            BalanceWidgetProvider.requestUpdate(appContext)
         }.isSuccess
     }
 
@@ -432,6 +601,7 @@ class TopScreenViewModel(
         _latestCards.value = emptyList()
         _nfcData.value = ""
         _isDataRefreshed.value = false
+        BalanceWidgetProvider.requestUpdate(appContext)
         refreshDerivedState(remainingHistory, buildSummaries(remainingHistory).firstOrNull()?.cardId)
     }
 
@@ -453,24 +623,29 @@ class TopScreenViewModel(
     private suspend fun readTagData(tag: Tag, context: Context): ReadResult =
         withContext(Dispatchers.IO) {
             val id = tag.id
+            if (id.size != FELICA_ID_LENGTH) {
+                return@withContext ReadResult("", emptyList(), "交通系ICカードとして読み取れませんでした")
+            }
             val cardId = id.toHexString()
+            val felica = NfcF.get(tag)
+                ?: return@withContext ReadResult(cardId, emptyList(), "交通系ICカードとして読み取れませんでした")
             try {
-                val felica = NfcF.get(tag)
                 felica.connect()
                 val readChunks = readHistoryChunks(felica, id, context, cardId)
-                felica.close()
                 val cards = withCalculatedAmounts(readChunks.cards)
                 ReadResult(
                     cardId = cardId,
                     cards = cards,
                     rawText = buildRawText(cardId, cards, readChunks.rawResponses)
                 )
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 ReadResult(
                     cardId = cardId,
                     cards = emptyList(),
-                    rawText = "NFCタグの読み取りに失敗しました: ${e.message}"
+                    rawText = "NFCタグの読み取りに失敗しました"
                 )
+            } finally {
+                runCatching { felica.close() }
             }
         }
 
@@ -492,12 +667,17 @@ class TopScreenViewModel(
                 break
             }
 
+            if (!isValidHistoryResponse(response, requestSize)) {
+                if (startBlock == 0) {
+                    throw IllegalStateException("Invalid FeliCa history response")
+                }
+                break
+            }
+
             rawResponses.add(response)
             val chunkCards = fromData(response, context, cardId)
-            if (chunkCards.isEmpty()) break
-
             cards.addAll(chunkCards)
-            if (chunkCards.size < requestSize) break
+            if ((response[12].toInt() and 0xff) == 0) break
         }
 
         return ReadChunks(
@@ -507,19 +687,29 @@ class TopScreenViewModel(
     }
 
     private fun fromData(data: ByteArray, context: Context, cardId: String): List<Card> {
-        if (data.size <= 13) return emptyList()
+        if (data.size < HISTORY_RESPONSE_HEADER_SIZE) return emptyList()
 
         val size: Int = data[12].toInt() and 0xff
+        if (size > MAX_HISTORY_RECORDS_PER_RESPONSE || data.size < HISTORY_RESPONSE_HEADER_SIZE + size * HISTORY_BLOCK_SIZE) {
+            return emptyList()
+        }
         val cards = mutableListOf<Card>()
         for (i in 0 until size) {
-            if (13 + i * 16 + 15 >= data.size) break
-            val felica = SuicaReader.parse(data, 13 + i * 16)
+            val offset = HISTORY_RESPONSE_HEADER_SIZE + i * HISTORY_BLOCK_SIZE
+            val felica = SuicaReader.parse(data, offset)
             if (felica.year == 0 || felica.month !in 1..12 || felica.day !in 1..31) continue
             val card: Card = Card.getCard(context, felica)
             card.cardId = cardId
             cards.add(card)
         }
         return cards
+    }
+
+    private fun isValidHistoryResponse(response: ByteArray, requestedBlocks: Int): Boolean {
+        if (response.size < HISTORY_RESPONSE_HEADER_SIZE) return false
+        val blockCount = response[12].toInt() and 0xff
+        if (blockCount > requestedBlocks || blockCount > MAX_HISTORY_RECORDS_PER_RESPONSE) return false
+        return response.size >= HISTORY_RESPONSE_HEADER_SIZE + blockCount * HISTORY_BLOCK_SIZE
     }
 
     private fun withCalculatedAmounts(cards: List<Card>): List<Card> {
@@ -651,7 +841,7 @@ class TopScreenViewModel(
         val rawJson = preferences.getString(KEY_HISTORY, null) ?: return emptyList()
         return runCatching {
             val array = JSONArray(rawJson)
-            List(array.length()) { index ->
+            List(minOf(array.length(), MAX_HISTORY_ITEMS)) { index ->
                 array.getJSONObject(index).toCard()
             }
         }.getOrDefault(emptyList())
@@ -661,6 +851,7 @@ class TopScreenViewModel(
         val array = JSONArray()
         cards.forEach { card -> array.put(card.toJson()) }
         preferences.edit().putString(KEY_HISTORY, array.toString()).apply()
+        BalanceWidgetProvider.requestUpdate(appContext)
     }
 
     private fun loadAliases(): Map<String, String> {
@@ -828,21 +1019,46 @@ class TopScreenViewModel(
         private const val KEY_SUMMARY_BACKGROUND_COLOR = "summary_background_color"
         private const val KEY_NOTICE_BACKGROUND_COLOR = "notice_background_color"
         private const val KEY_DELETE_BUTTON_COLOR = "delete_button_color"
+        private const val KEY_BALANCE_BACKGROUND_COLOR = "balance_background_color"
+        private const val KEY_OTHER_CARD_BACKGROUND_COLOR = "other_card_background_color"
+        private const val KEY_WIDGET_BACKGROUND_COLOR = "widget_background_color"
+        private const val KEY_SUMMARY_BACKGROUND_IMAGE_URI = "summary_background_image_uri"
+        private const val KEY_WIDGET_BACKGROUND_IMAGE_URI = "widget_background_image_uri"
         private const val KEY_APP_TITLE = "app_title"
         private const val KEY_USE_SEARCH_ICON = "use_search_icon"
         private const val KEY_SHOW_LEGACY_SEARCH_BAR = "show_legacy_search_bar"
         private const val KEY_SHOW_CARD_BALANCES = "show_card_balances"
+        private const val KEY_USE_MODERN_UI = "use_modern_ui"
+        private const val KEY_SHOW_BOTTOM_TAB_LABELS = "show_bottom_tab_labels"
+        private const val KEY_SHOW_DELETE_BUTTON = "show_delete_button"
+        private const val KEY_SHOW_READ_NOTICE = "show_read_notice"
+        private const val KEY_SHOW_STATISTICS_BUTTON = "show_statistics_button"
+        private const val KEY_SHOW_PALETTE_ICON = "show_palette_icon"
+        private const val KEY_SHOW_MORE_MENU = "show_more_menu"
         private const val KEY_FEATURE_FLAGS = "feature_flags"
         private const val DEFAULT_ACCENT_COLOR = "#8AD7C8"
         private const val DEFAULT_BALANCE_COLOR = "#8AD7C8"
         private const val DEFAULT_SUMMARY_BACKGROUND_COLOR = "#103F3A"
         private const val DEFAULT_NOTICE_BACKGROUND_COLOR = "#174F47"
         private const val DEFAULT_DELETE_BUTTON_COLOR = "#533232"
+        private const val DEFAULT_BALANCE_BACKGROUND_COLOR = "#0A2528"
+        private const val DEFAULT_OTHER_CARD_BACKGROUND_COLOR = "#101C24"
+        private const val DEFAULT_WIDGET_BACKGROUND_COLOR = "#000000"
         private const val DEFAULT_APP_TITLE = "SuicaNFC KD"
         private const val LEGACY_CARD_ID = "legacy"
         private const val READ_BLOCK_CHUNK_SIZE = 10
         private const val MAX_READ_BLOCKS = 50
         private const val MAX_HISTORY_ITEMS = 300
+        private const val MAX_BACKUP_JSON_LENGTH = 2 * 1024 * 1024
+        private const val FELICA_ID_LENGTH = 8
+        private const val HISTORY_RESPONSE_HEADER_SIZE = 13
+        private const val HISTORY_BLOCK_SIZE = 16
+        private const val MAX_HISTORY_RECORDS_PER_RESPONSE = 10
+        private val NFC_ACTIONS = setOf(
+            NfcAdapter.ACTION_TAG_DISCOVERED,
+            NfcAdapter.ACTION_TECH_DISCOVERED,
+            NfcAdapter.ACTION_NDEF_DISCOVERED
+        )
     }
 }
 

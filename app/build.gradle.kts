@@ -1,5 +1,6 @@
 ﻿import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -7,8 +8,13 @@ plugins {
 }
 
 val appId = "io.github.kdroidwin.suicanfc"
-val verCode = 105
-val verId = "1.2.1"
+val verCode = 118
+val verId = "1.4.0"
+val signingProperties = Properties().apply {
+    val signingFile = file("keystore.properties")
+    require(signingFile.exists()) { "Missing app/keystore.properties for release signing" }
+    signingFile.inputStream().use(::load)
+}
 
 android {
     namespace = "com.example.suicanfcreader"
@@ -29,16 +35,18 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file("suicanfc-release.jks")
-            storePassword = "suicanfc-kd-release-2026"
-            keyAlias = "suicanfc-kd"
-            keyPassword = "suicanfc-kd-release-2026"
+            storeFile = file(signingProperties.getProperty("storeFile"))
+            storePassword = signingProperties.getProperty("storePassword")
+            keyAlias = signingProperties.getProperty("keyAlias")
+            keyPassword = signingProperties.getProperty("keyPassword")
         }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            // R8 remains enabled. Resource shrinking is disabled because it is not
+            // reliable on the target Windows build environment.
             isShrinkResources = false
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(
@@ -110,4 +118,9 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+}
+
+// Avoid ZipFileSystem handle conflicts on Windows while compiling Java sources.
+tasks.withType<org.gradle.api.tasks.compile.JavaCompile>().configureEach {
+    options.compilerArgs.add("-XDuseOptimizedZip=false")
 }

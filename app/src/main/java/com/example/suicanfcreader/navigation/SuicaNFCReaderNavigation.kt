@@ -6,6 +6,8 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.example.suicanfcreader.view.screens.TopScreen
+import com.example.suicanfcreader.view.screens.SettingsScreen
+import com.example.suicanfcreader.view.screens.StatsScreen
 import com.example.suicanfcreader.viewModel.TopScreenViewModel
 import com.example.suicanfcreader.viewModel.TopScreenViewModelFactory
 
@@ -24,7 +26,13 @@ fun SuicaNFCReaderNavigation(
         modifier = modifier
     ) {
         composable(Screen.TopScreen.route) {
-             TopScreen(viewModel)
+             TopScreen(viewModel, onOpenStats = { navController.navigate(Screen.Stats.route) })
+        }
+        composable(Screen.Stats.route) {
+            StatsScreen(viewModel, onBack = { navController.popBackStack() })
+        }
+        composable(Screen.Settings.route) {
+            SettingsScreen(viewModel, onBack = { navController.popBackStack() })
         }
     }
 }

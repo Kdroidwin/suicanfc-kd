@@ -3,6 +3,7 @@
 import android.app.Activity
 import android.graphics.Color.TRANSPARENT
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -11,6 +12,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -32,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.currentBackStackEntryAsState
+import com.example.suicanfcreader.navigation.Screen
 import com.example.suicanfcreader.model.AppThemeMode
 import com.example.suicanfcreader.navigation.SuicaNFCReaderNavigation
 import com.example.suicanfcreader.ui.theme.SuicaNFCReaderTheme
@@ -44,32 +49,41 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
     val accentColorHex = viewModel.accentColorHex.observeAsState("#8AD7C8")
     val appTitle = viewModel.appTitle.observeAsState("SuicaNFC KD")
     val useSearchIcon = viewModel.useSearchIcon.observeAsState(true)
-    val showCardBalances = viewModel.showCardBalances.observeAsState(true)
+    val showPaletteIcon = viewModel.showPaletteIcon.observeAsState(true)
+    val showMoreMenu = viewModel.showMoreMenu.observeAsState(true)
+    val useModernUi = viewModel.useModernUi.observeAsState(true)
+    val showBottomTabLabels = viewModel.showBottomTabLabels.observeAsState(true)
 
     SuicaNFCReaderTheme(themeMode = themeMode.value, accentColorHex = accentColorHex.value) {
         val navController = rememberNavController()
+        val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
         ApplySystemBars(themeMode.value)
 
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
                 TopAppBar(
-                    title = { Text(appTitle.value) },
+                    title = {
+                        Text(
+                            text = appTitle.value,
+                            modifier = Modifier.clickable { navController.navigate(Screen.Settings.route) }
+                        )
+                    },
                     actions = {
                         if (useSearchIcon.value) {
                             IconButton(onClick = viewModel::showSearchDialog) {
                                 SearchIcon()
                             }
                         }
-                        ThemeMenu(
-                            selectedMode = themeMode.value,
-                            onThemeSelected = viewModel::setThemeMode
-                        )
-                        MoreMenu(
-                            showCardBalances = showCardBalances.value,
-                            onShowCardBalancesChanged = viewModel::setShowCardBalances,
-                            onOpenSettings = viewModel::showSettingsDialog
-                        )
+                        if (showPaletteIcon.value) {
+                            ThemeMenu(
+                                selectedMode = themeMode.value,
+                                onThemeSelected = viewModel::setThemeMode
+                            )
+                        }
+                        if (showMoreMenu.value) {
+                            MoreMenu(onOpenSettings = { navController.navigate(Screen.Settings.route) })
+                        }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.background,
@@ -78,6 +92,22 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
                         actionIconContentColor = MaterialTheme.colorScheme.onBackground
                     )
                 )
+            },
+            bottomBar = {
+                if (useModernUi.value) {
+                    AppNavigationBar(
+                        showLabels = showBottomTabLabels.value,
+                        currentRoute = currentRoute,
+                        onCards = {
+                            navController.navigate(Screen.TopScreen.route) {
+                                popUpTo(Screen.TopScreen.route) { inclusive = false }
+                                launchSingleTop = true
+                            }
+                        },
+                        onStats = { navController.navigate(Screen.Stats.route) },
+                        onSettings = { navController.navigate(Screen.Settings.route) }
+                    )
+                }
             },
         ) { innerPadding ->
             SuicaNFCReaderNavigation(
@@ -144,8 +174,6 @@ private fun ThemeMenu(
 
 @Composable
 private fun MoreMenu(
-    showCardBalances: Boolean,
-    onShowCardBalancesChanged: (Boolean) -> Unit,
     onOpenSettings: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -162,19 +190,83 @@ private fun MoreMenu(
         onDismissRequest = { expanded = false }
     ) {
         DropdownMenuItem(
-            text = { Text(if (showCardBalances) "カード別残高を非表示" else "カード別残高を表示") },
-            onClick = {
-                onShowCardBalancesChanged(!showCardBalances)
-                expanded = false
-            }
-        )
-        DropdownMenuItem(
             text = { Text("設定") },
             onClick = {
                 onOpenSettings()
                 expanded = false
             }
         )
+    }
+}
+
+@Composable
+private fun AppNavigationBar(
+    showLabels: Boolean,
+    currentRoute: String?,
+    onCards: () -> Unit,
+    onStats: () -> Unit,
+    onSettings: () -> Unit
+) {
+    NavigationBar(containerColor = MaterialTheme.colorScheme.background) {
+        NavigationBarItem(
+            selected = currentRoute == Screen.TopScreen.route,
+            onClick = onCards,
+            icon = { NavigationSymbol("card") },
+            label = if (showLabels) {{ Text("カード") }} else null,
+            alwaysShowLabel = showLabels
+        )
+        NavigationBarItem(
+            selected = currentRoute == Screen.Stats.route,
+            onClick = onStats,
+            icon = { NavigationSymbol("stats") },
+            label = if (showLabels) {{ Text("統計") }} else null,
+            alwaysShowLabel = showLabels
+        )
+        NavigationBarItem(
+            selected = currentRoute == Screen.Settings.route,
+            onClick = onSettings,
+            icon = { NavigationSymbol("settings") },
+            label = if (showLabels) {{ Text("設定") }} else null,
+            alwaysShowLabel = showLabels
+        )
+    }
+}
+
+@Composable
+private fun NavigationSymbol(kind: String) {
+    val color = MaterialTheme.colorScheme.onSurface
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    Canvas(modifier = Modifier.size(24.dp)) {
+        when (kind) {
+            "card" -> {
+                drawRoundRect(color = color, size = Size(size.width * .78f, size.height * .58f), topLeft = Offset(size.width * .11f, size.height * .21f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(3f, 3f))
+                drawRect(color = surfaceColor, topLeft = Offset(size.width * .18f, size.height * .43f), size = Size(size.width * .64f, size.height * .08f))
+            }
+            "stats" -> {
+                drawCircle(color = color, radius = size.minDimension * .36f, center = Offset(size.width / 2, size.height / 2), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.5f))
+                drawLine(color, Offset(size.width / 2, size.height / 2), Offset(size.width / 2, size.height * .2f), 2.5f)
+                drawLine(color, Offset(size.width / 2, size.height / 2), Offset(size.width * .78f, size.height * .64f), 2.5f)
+            }
+            else -> {
+                val center = Offset(size.width / 2, size.height / 2)
+                val outerRadius = size.minDimension * .31f
+                val innerRadius = size.minDimension * .12f
+                repeat(8) { index ->
+                    val angle = Math.toRadians((index * 45.0) - 90.0)
+                    val start = Offset(
+                        center.x + kotlin.math.cos(angle).toFloat() * outerRadius * .74f,
+                        center.y + kotlin.math.sin(angle).toFloat() * outerRadius * .74f
+                    )
+                    val end = Offset(
+                        center.x + kotlin.math.cos(angle).toFloat() * outerRadius,
+                        center.y + kotlin.math.sin(angle).toFloat() * outerRadius
+                    )
+                    drawLine(color, start, end, 2.5f)
+                }
+                drawCircle(color, radius = outerRadius * .7f, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.5f))
+                drawCircle(color, radius = innerRadius, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.5f))
+            }
+        }
     }
 }
 

@@ -6,10 +6,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.lifecycleScope
 import com.example.suicanfcreader.viewModel.TopScreenViewModel
 import com.example.suicanfcreader.viewModel.TopScreenViewModelFactory
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var nfcAdapter: NfcAdapter? = null
@@ -21,13 +19,6 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             SuicaNFCReaderApp(topScreenViewModel)
-        }
-
-        lifecycleScope.launch {
-            topScreenViewModel.nfcData.observe(this@MainActivity) { data ->
-                // Handle the NFC data
-                println("NFC Data: $data")
-            }
         }
     }
 
@@ -44,6 +35,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        topScreenViewModel.handleNfcIntent(intent,this)
+        topScreenViewModel.handleNfcIntent(intent, this)
     }
 }

@@ -1,10 +1,19 @@
 ﻿package com.example.suicanfcreader.view.screens
 
+import android.content.Intent
+import android.graphics.ImageDecoder
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,12 +58,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import com.example.suicanfcreader.model.SuicaCardSummary
 import com.example.suicanfcreader.viewModel.TopScreenViewModel
@@ -64,37 +77,64 @@ import com.example.suicanfcreader.model.Card as TransitHistoryRecord
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TopScreen(
-    topScreenViewModel: TopScreenViewModel
+    topScreenViewModel: TopScreenViewModel,
+    onOpenStats: () -> Unit
 ) {
     val summaries = topScreenViewModel.cardSummaries.observeAsState(emptyList())
     val selectedCardId = topScreenViewModel.selectedCardId.observeAsState()
     val selectedHistory = topScreenViewModel.selectedHistory.observeAsState(emptyList())
     val searchQuery = topScreenViewModel.searchQuery.observeAsState("")
-    val accentColorHex = topScreenViewModel.accentColorHex.observeAsState("#8AD7C8")
     val balanceColorHex = topScreenViewModel.balanceColorHex.observeAsState("#8AD7C8")
     val summaryBackgroundColorHex = topScreenViewModel.summaryBackgroundColorHex.observeAsState("#103F3A")
     val noticeBackgroundColorHex = topScreenViewModel.noticeBackgroundColorHex.observeAsState("#174F47")
     val deleteButtonColorHex = topScreenViewModel.deleteButtonColorHex.observeAsState("#533232")
-    val appTitle = topScreenViewModel.appTitle.observeAsState("SuicaNFC KD")
-    val useSearchIcon = topScreenViewModel.useSearchIcon.observeAsState(true)
+    val balanceBackgroundColorHex = topScreenViewModel.balanceBackgroundColorHex.observeAsState("#0A2528")
+    val otherCardBackgroundColorHex = topScreenViewModel.otherCardBackgroundColorHex.observeAsState("#101C24")
+    val summaryBackgroundImageUri = topScreenViewModel.summaryBackgroundImageUri.observeAsState()
     val showLegacySearchBar = topScreenViewModel.showLegacySearchBar.observeAsState(false)
     val searchDialogVisible = topScreenViewModel.searchDialogVisible.observeAsState(false)
     val showCardBalances = topScreenViewModel.showCardBalances.observeAsState(true)
-    val settingsDialogVisible = topScreenViewModel.settingsDialogVisible.observeAsState(false)
+    val useModernUi = topScreenViewModel.useModernUi.observeAsState(true)
+    val showDeleteButton = topScreenViewModel.showDeleteButton.observeAsState(true)
+    val showReadNotice = topScreenViewModel.showReadNotice.observeAsState(true)
+    val showStatisticsButton = topScreenViewModel.showStatisticsButton.observeAsState(true)
     val readCardIds = topScreenViewModel.readCardIds.observeAsState(emptySet())
-    val featureFlags = topScreenViewModel.featureFlags.observeAsState(emptyMap())
     val clipboardManager: ClipboardManager = LocalClipboardManager.current
     val selectedSummary = summaries.value.firstOrNull { it.cardId == selectedCardId.value }
     val balanceColor = balanceColorHex.value.toComposeColor() ?: MaterialTheme.colorScheme.primary
     val summaryBackgroundColor = summaryBackgroundColorHex.value.toComposeColor() ?: Color(0xFF103F3A)
     val noticeBackgroundColor = noticeBackgroundColorHex.value.toComposeColor() ?: Color(0xFF174F47)
     val deleteButtonColor = deleteButtonColorHex.value.toComposeColor() ?: Color(0xFF533232)
+    val balanceBackgroundColor = balanceBackgroundColorHex.value.toComposeColor() ?: Color(0xFF0A2528)
+    val otherCardBackgroundColor = otherCardBackgroundColorHex.value.toComposeColor() ?: Color(0xFF101C24)
+    val summaryBackgroundImage = rememberSummaryBackgroundImage(summaryBackgroundImageUri.value)
     val groupedHistory = selectedHistory.value
         .mapIndexed { index, card -> index to card }
         .groupBy { it.second.date.orEmpty() }
     var aliasDialogCard by remember { mutableStateOf<SuicaCardSummary?>(null) }
     var editingRecord by remember { mutableStateOf<TransitHistoryRecord?>(null) }
-    var showStatsDialog by remember { mutableStateOf(false) }
+    val balanceSummaryContent: @Composable (Modifier) -> Unit = { modifier ->
+        BalanceSummary(
+            modifier = modifier,
+            summary = selectedSummary,
+            hasFreshData = selectedSummary?.cardId in readCardIds.value,
+            balanceColor = balanceColor,
+            summaryBackgroundColor = summaryBackgroundColor,
+            noticeBackgroundColor = noticeBackgroundColor,
+            balanceBackgroundColor = balanceBackgroundColor,
+            deleteButtonColor = deleteButtonColor,
+            summaryBackgroundImage = summaryBackgroundImage,
+            modern = useModernUi.value,
+            showReadNotice = showReadNotice.value,
+            showDeleteButton = showDeleteButton.value,
+            onCopyJson = { clipboardManager.setText(AnnotatedString(topScreenViewModel.exportSelectedJson())) },
+            onCopyCsv = { clipboardManager.setText(AnnotatedString(topScreenViewModel.exportSelectedCsv())) },
+            onCopyNotion = { clipboardManager.setText(AnnotatedString(topScreenViewModel.exportSelectedNotionMarkdown())) },
+            onRename = { selectedSummary?.let { aliasDialogCard = it } },
+            onClearSelected = topScreenViewModel::clearSelectedCardHistory,
+            canCopy = selectedSummary != null,
+        )
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -106,36 +146,43 @@ fun TopScreen(
     ) {
         item {
             Spacer(modifier = Modifier.height(10.dp))
-            CardSelector(
-                summaries = summaries.value,
-                selectedCardId = selectedCardId.value,
-                balanceColor = balanceColor,
-                onSelectCard = topScreenViewModel::selectCard
-            )
+            if (!useModernUi.value) {
+                CardSelector(
+                    summaries = summaries.value,
+                    selectedCardId = selectedCardId.value,
+                    balanceColor = balanceColor,
+                    onSelectCard = topScreenViewModel::selectCard
+                )
+            }
         }
 
         item {
-            BalanceSummary(
-                summary = selectedSummary,
-                hasFreshData = selectedSummary?.cardId in readCardIds.value,
-                balanceColor = balanceColor,
-                summaryBackgroundColor = summaryBackgroundColor,
-                noticeBackgroundColor = noticeBackgroundColor,
-                deleteButtonColor = deleteButtonColor,
-                onCopyJson = {
-                    clipboardManager.setText(AnnotatedString(topScreenViewModel.exportSelectedJson()))
-                },
-                onCopyCsv = {
-                    clipboardManager.setText(AnnotatedString(topScreenViewModel.exportSelectedCsv()))
-                },
-                onCopyNotion = {
-                    clipboardManager.setText(AnnotatedString(topScreenViewModel.exportSelectedNotionMarkdown()))
-                },
-                onStats = { showStatsDialog = true },
-                onRename = { selectedSummary?.let { aliasDialogCard = it } },
-                onClearSelected = topScreenViewModel::clearSelectedCardHistory,
-                canCopy = selectedSummary != null,
-                canClearSelected = selectedSummary != null
+            if (useModernUi.value && summaries.value.size > 1) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    balanceSummaryContent(Modifier.weight(2f))
+                    ModernSideCards(
+                        modifier = Modifier.weight(1f),
+                        summaries = summaries.value,
+                        selectedCardId = selectedCardId.value,
+                        balanceColor = balanceColor,
+                        backgroundColor = otherCardBackgroundColor,
+                        onSelectCard = topScreenViewModel::selectCard
+                    )
+                }
+            } else {
+                balanceSummaryContent(Modifier.fillMaxWidth())
+            }
+        }
+
+        item {
+            CardActionArea(
+                showStatisticsButton = showStatisticsButton.value,
+                enabled = selectedSummary != null,
+                onStats = onOpenStats
             )
         }
 
@@ -152,6 +199,7 @@ fun TopScreen(
                     selected = summary.cardId == selectedCardId.value,
                     isRead = summary.cardId in readCardIds.value,
                     balanceColor = balanceColor,
+                    otherCardBackgroundColor = otherCardBackgroundColor,
                     onClick = { topScreenViewModel.selectCard(summary.cardId) }
                 )
             }
@@ -186,13 +234,21 @@ fun TopScreen(
                     DateHeader(date.toJapaneseDateLabel())
                 }
                 items(records, key = { (_, card) -> "${card.cardId}-${card.number}-${card.date}" }) { (index, card) ->
-                    HistoryCard(
-                        card = card,
-                        index = index + 1,
-                        isLatest = index == 0,
-                        balanceColor = balanceColor,
-                        onEdit = { editingRecord = card }
-                    )
+                    if (useModernUi.value) {
+                        ModernHistoryItem(
+                            card = card,
+                            balanceColor = balanceColor,
+                            onEdit = { editingRecord = card }
+                        )
+                    } else {
+                        HistoryCard(
+                            card = card,
+                            index = index + 1,
+                            isLatest = index == 0,
+                            balanceColor = balanceColor,
+                            onEdit = { editingRecord = card }
+                        )
+                    }
                 }
             }
         }
@@ -224,15 +280,6 @@ fun TopScreen(
         )
     }
 
-    if (showStatsDialog) {
-        TextDialog(
-            title = "統計",
-            text = topScreenViewModel.statsText(),
-            onDismiss = { showStatsDialog = false },
-            onCopy = { clipboardManager.setText(AnnotatedString(topScreenViewModel.statsText())) }
-        )
-    }
-
     if (searchDialogVisible.value) {
         SearchDialog(
             query = searchQuery.value,
@@ -242,35 +289,6 @@ fun TopScreen(
         )
     }
 
-    if (settingsDialogVisible.value) {
-        SettingsDialog(
-            appTitle = appTitle.value,
-            accentColorHex = accentColorHex.value,
-            balanceColorHex = balanceColorHex.value,
-            summaryBackgroundColorHex = summaryBackgroundColorHex.value,
-            noticeBackgroundColorHex = noticeBackgroundColorHex.value,
-            deleteButtonColorHex = deleteButtonColorHex.value,
-            useSearchIcon = useSearchIcon.value,
-            showLegacySearchBar = showLegacySearchBar.value,
-            showCardBalances = showCardBalances.value,
-            featureFlags = featureFlags.value,
-            onDismiss = topScreenViewModel::dismissSettingsDialog,
-            onAppTitleSave = topScreenViewModel::setAppTitle,
-            onAccentSave = topScreenViewModel::setAccentColor,
-            onBalanceColorSave = topScreenViewModel::setBalanceColor,
-            onSummaryBackgroundColorSave = topScreenViewModel::setSummaryBackgroundColor,
-            onNoticeBackgroundColorSave = topScreenViewModel::setNoticeBackgroundColor,
-            onDeleteButtonColorSave = topScreenViewModel::setDeleteButtonColor,
-            onUseSearchIconChanged = topScreenViewModel::setUseSearchIcon,
-            onShowLegacySearchBarChanged = topScreenViewModel::setShowLegacySearchBar,
-            onShowCardBalancesChanged = topScreenViewModel::setShowCardBalances,
-            onFeatureChanged = topScreenViewModel::setFeatureEnabled,
-            onExportBackup = {
-                clipboardManager.setText(AnnotatedString(topScreenViewModel.exportBackupJson()))
-            },
-            onImportBackup = topScreenViewModel::importBackupJson
-        )
-    }
 }
 
 @Composable
@@ -331,32 +349,136 @@ private fun CardSelector(
 }
 
 @Composable
+private fun ModernCardChips(
+    summaries: List<SuicaCardSummary>,
+    selectedCardId: String?,
+    balanceColor: Color,
+    onSelectCard: (String) -> Unit
+) {
+    if (summaries.size <= 1) return
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(summaries.filter { it.cardId != selectedCardId }, key = { it.cardId }) { summary ->
+            Surface(
+                modifier = Modifier.clickable { onSelectCard(summary.cardId) },
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                tonalElevation = 0.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Text(
+                        text = summary.title,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = summary.latestRecord.balanceText(),
+                        color = balanceColor,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModernSideCards(
+    modifier: Modifier,
+    summaries: List<SuicaCardSummary>,
+    selectedCardId: String?,
+    balanceColor: Color,
+    backgroundColor: Color,
+    onSelectCard: (String) -> Unit
+) {
+    val otherCards = summaries.filter { it.cardId != selectedCardId }.take(2)
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        otherCards.forEach { summary ->
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelectCard(summary.cardId) },
+                shape = RoundedCornerShape(8.dp),
+                colors = CardDefaults.cardColors(containerColor = backgroundColor),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = summary.title,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = summary.latestRecord.balanceText(),
+                        color = balanceColor,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun BalanceSummary(
+    modifier: Modifier,
     summary: SuicaCardSummary?,
     hasFreshData: Boolean,
     balanceColor: Color,
     summaryBackgroundColor: Color,
     noticeBackgroundColor: Color,
+    balanceBackgroundColor: Color,
     deleteButtonColor: Color,
+    summaryBackgroundImage: ImageBitmap?,
+    modern: Boolean,
+    showReadNotice: Boolean,
+    showDeleteButton: Boolean,
     onCopyJson: () -> Unit,
     onCopyCsv: () -> Unit,
     onCopyNotion: () -> Unit,
-    onStats: () -> Unit,
     onRename: () -> Unit,
     onClearSelected: () -> Unit,
-    canCopy: Boolean,
-    canClearSelected: Boolean
+    canCopy: Boolean
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.aspectRatio(16f / 9f),
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = summaryBackgroundColor),
+        colors = CardDefaults.cardColors(containerColor = balanceBackgroundColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(22.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (summaryBackgroundImage != null) {
+                Image(
+                    bitmap = summaryBackgroundImage,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                    alpha = 0.72f
+                )
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -372,7 +494,7 @@ private fun BalanceSummary(
                     ) {
                         Text(
                             modifier = Modifier.weight(1f, fill = false),
-                            text = summary?.title ?: "suicanfc kd",
+                            text = summary?.title ?: "SuicaNFC KD",
                             color = Color(0xFFDDF7EF),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
@@ -386,62 +508,88 @@ private fun BalanceSummary(
                         ) {
                             PencilIcon(Color(0xFFDDF7EF))
                         }
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = noticeBackgroundColor
-                    ) {
-                        Text(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            text = if (hasFreshData) "このカードを読み取りました" else "交通系ICカードをかざしてください",
-                            color = Color(0xFFE8FFF8),
-                            style = MaterialTheme.typography.bodyMedium
+                        ExportMenuIconButton(
+                            enabled = canCopy,
+                            onCopyJson = onCopyJson,
+                            onCopyCsv = onCopyCsv,
+                            onCopyNotion = onCopyNotion
                         )
+                    }
+                    if (showReadNotice) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = noticeBackgroundColor
+                        ) {
+                            Text(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                text = if (hasFreshData) "このカードを読み取りました" else "交通系ICカードをかざしてください",
+                                color = Color(0xFFE8FFF8),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
                 }
                 StatusDot(isActive = hasFreshData)
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = summary?.latestRecord.balanceText(),
-                    color = balanceColor,
-                    style = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = summary?.latestRecord?.date ?: "履歴はまだありません",
-                    color = Color(0xFFC2E8DE),
-                    style = MaterialTheme.typography.bodyMedium
-                )
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = summary?.latestRecord.balanceText(),
+                        color = balanceColor,
+                        style = if (modern) MaterialTheme.typography.displayLarge else MaterialTheme.typography.displaySmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = summary?.latestRecord?.date ?: "履歴はまだありません",
+                        color = Color(0xFFC2E8DE),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                if (showDeleteButton) {
+                    IconButton(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(42.dp),
+                        enabled = canCopy,
+                        onClick = onClearSelected
+                    ) {
+                        DeleteIcon(deleteButtonColor)
+                    }
+                }
             }
 
+            }
+        }
+    }
+}
+
+@Composable
+private fun CardActionArea(
+    showStatisticsButton: Boolean,
+    enabled: Boolean,
+    onStats: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (showStatisticsButton) {
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ExportMenuButton(
-                    enabled = canCopy,
-                    onCopyJson = onCopyJson,
-                    onCopyCsv = onCopyCsv,
-                    onCopyNotion = onCopyNotion
-                )
-                Button(onClick = onStats, enabled = canCopy, shape = RoundedCornerShape(8.dp)) {
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onStats,
+                    enabled = enabled,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
                     Text("統計")
                 }
-            }
-            Button(
-                onClick = onClearSelected,
-                enabled = canClearSelected,
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = deleteButtonColor,
-                    contentColor = Color(0xFFFFF2F2),
-                    disabledContainerColor = deleteButtonColor.copy(alpha = 0.38f),
-                    disabledContentColor = Color(0xFFFFF2F2).copy(alpha = 0.5f)
-                )
-            ) {
-                Text("このカードを削除")
             }
         }
     }
@@ -453,6 +601,7 @@ private fun CardBalanceRow(
     selected: Boolean,
     isRead: Boolean,
     balanceColor: Color,
+    otherCardBackgroundColor: Color,
     onClick: () -> Unit
 ) {
     Card(
@@ -461,7 +610,7 @@ private fun CardBalanceRow(
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+            containerColor = if (selected) MaterialTheme.colorScheme.surfaceVariant else otherCardBackgroundColor
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
@@ -548,6 +697,33 @@ private fun ExportMenuButton(
 }
 
 @Composable
+private fun ExportMenuIconButton(
+    enabled: Boolean,
+    onCopyJson: () -> Unit,
+    onCopyCsv: () -> Unit,
+    onCopyNotion: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(
+            modifier = Modifier.size(34.dp),
+            enabled = enabled,
+            onClick = { expanded = true }
+        ) {
+            ExportIcon(Color(0xFFDDF7EF))
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(text = { Text("CSV") }, onClick = { onCopyCsv(); expanded = false })
+            DropdownMenuItem(text = { Text("JSON") }, onClick = { onCopyJson(); expanded = false })
+            DropdownMenuItem(text = { Text("Notion") }, onClick = { onCopyNotion(); expanded = false })
+        }
+    }
+}
+
+@Composable
 private fun StatusDot(isActive: Boolean) {
     val color = if (isActive) Color(0xFF9BE15D) else Color(0xFFFFC857)
     Box(
@@ -580,6 +756,33 @@ private fun PencilIcon(color: Color) {
             end = Offset(size.width * 0.36f, size.height * 0.80f),
             strokeWidth = stroke
         )
+    }
+}
+
+@Composable
+private fun ExportIcon(color: Color) {
+    Canvas(modifier = Modifier.size(20.dp)) {
+        val stroke = size.minDimension * 0.10f
+        drawLine(color, Offset(size.width * .5f, size.height * .13f), Offset(size.width * .5f, size.height * .65f), stroke)
+        drawLine(color, Offset(size.width * .28f, size.height * .43f), Offset(size.width * .5f, size.height * .65f), stroke)
+        drawLine(color, Offset(size.width * .72f, size.height * .43f), Offset(size.width * .5f, size.height * .65f), stroke)
+        drawLine(color, Offset(size.width * .18f, size.height * .82f), Offset(size.width * .82f, size.height * .82f), stroke)
+        drawLine(color, Offset(size.width * .18f, size.height * .82f), Offset(size.width * .18f, size.height * .65f), stroke)
+        drawLine(color, Offset(size.width * .82f, size.height * .82f), Offset(size.width * .82f, size.height * .65f), stroke)
+    }
+}
+
+@Composable
+private fun DeleteIcon(color: Color) {
+    Canvas(modifier = Modifier.size(20.dp)) {
+        val stroke = size.minDimension * 0.10f
+        drawLine(color, Offset(size.width * .25f, size.height * .29f), Offset(size.width * .75f, size.height * .29f), stroke)
+        drawLine(color, Offset(size.width * .43f, size.height * .18f), Offset(size.width * .57f, size.height * .18f), stroke)
+        drawLine(color, Offset(size.width * .32f, size.height * .31f), Offset(size.width * .37f, size.height * .82f), stroke)
+        drawLine(color, Offset(size.width * .68f, size.height * .31f), Offset(size.width * .63f, size.height * .82f), stroke)
+        drawLine(color, Offset(size.width * .37f, size.height * .82f), Offset(size.width * .63f, size.height * .82f), stroke)
+        drawLine(color, Offset(size.width * .46f, size.height * .43f), Offset(size.width * .46f, size.height * .70f), stroke)
+        drawLine(color, Offset(size.width * .54f, size.height * .43f), Offset(size.width * .54f, size.height * .70f), stroke)
     }
 }
 
@@ -643,6 +846,152 @@ private fun DateHeader(text: String) {
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.SemiBold
     )
+}
+
+@Composable
+private fun ModernHistoryItem(
+    card: TransitHistoryRecord,
+    balanceColor: Color,
+    onEdit: () -> Unit
+) {
+    val special = card.isSpecialActivity()
+    val primary = when {
+        special -> card.activityLabel().let { label ->
+            card.activityPlace()?.let { "$label ($it)" } ?: label
+        }
+        card.hasInPlace() || card.hasOutPlace() -> listOf(card.inStation, card.outStation)
+            .mapNotNull { it.firstReadableOrNull() }
+            .joinToString("  ->  ")
+            .ifBlank { card.action ?: card.kind ?: "利用" }
+        else -> card.action ?: card.kind ?: "利用"
+    }
+    val secondary = if (special) {
+        listOf(card.activityCompany(), card.activityLine()).mapNotNull { it.firstReadableOrNull() }.joinToString(" / ")
+    } else {
+        listOf(card.inCompany, card.inLine, card.outCompany, card.outLine)
+            .mapNotNull { it.firstReadableOrNull() }
+            .distinct()
+            .joinToString(" / ")
+    }.ifBlank { card.device ?: "交通系IC" }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp
+    ) {
+        SelectionContainer {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Surface(
+                    modifier = Modifier.size(32.dp),
+                    shape = CircleShape,
+                    color = if (special) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        HistoryRecordIcon(card = card, color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Text(
+                        text = primary,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = secondary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (!card.memo.isNullOrBlank() || !card.tags.isNullOrBlank()) {
+                        Text(
+                            text = listOfNotNull(card.memo, card.tags?.let { "#$it" }).joinToString("  "),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    TextButton(onClick = onEdit) { Text("修正") }
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = card.amountText(),
+                        color = card.amountColor(),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = card.balanceText(),
+                        color = balanceColor,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryRecordIcon(card: TransitHistoryRecord, color: Color) {
+    when {
+        card.isBusActivity() -> BusIcon(color)
+        card.activityLabel() == "物販" -> CashRegisterIcon(color)
+        card.activityLabel() == "チャージ" -> Text(
+            text = "+",
+            color = color,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+        else -> TrainIcon(color)
+    }
+}
+
+@Composable
+private fun TrainIcon(color: Color) {
+    Canvas(modifier = Modifier.size(19.dp)) {
+        val stroke = Stroke(width = size.minDimension * .1f)
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(size.width * .22f, size.height * .08f),
+            size = Size(size.width * .56f, size.height * .72f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * .12f, size.width * .12f),
+            style = stroke
+        )
+        drawLine(color, Offset(size.width * .33f, size.height * .35f), Offset(size.width * .67f, size.height * .35f), stroke.width)
+        drawCircle(color, radius = size.minDimension * .07f, center = Offset(size.width * .38f, size.height * .63f))
+        drawCircle(color, radius = size.minDimension * .07f, center = Offset(size.width * .62f, size.height * .63f))
+        drawLine(color, Offset(size.width * .35f, size.height * .87f), Offset(size.width * .65f, size.height * .87f), stroke.width)
+    }
+}
+
+@Composable
+private fun BusIcon(color: Color) {
+    Canvas(modifier = Modifier.size(19.dp)) {
+        val stroke = Stroke(width = size.minDimension * .1f)
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(size.width * .08f, size.height * .19f),
+            size = Size(size.width * .84f, size.height * .55f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * .1f, size.width * .1f),
+            style = stroke
+        )
+        drawLine(color, Offset(size.width * .22f, size.height * .39f), Offset(size.width * .78f, size.height * .39f), stroke.width)
+        drawCircle(color, radius = size.minDimension * .09f, center = Offset(size.width * .27f, size.height * .8f))
+        drawCircle(color, radius = size.minDimension * .09f, center = Offset(size.width * .73f, size.height * .8f))
+    }
 }
 
 @Composable
@@ -1040,6 +1389,9 @@ private fun SearchDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.background,
+        titleContentColor = MaterialTheme.colorScheme.onBackground,
+        textContentColor = MaterialTheme.colorScheme.onBackground,
         title = { Text("履歴検索") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1099,16 +1451,141 @@ private fun TextDialog(
 }
 
 @Composable
-private fun SettingsDialog(
+fun StatsScreen(
+    viewModel: TopScreenViewModel,
+    onBack: () -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 20.dp)
+    ) {
+        PageHeader(title = "統計", onBack = onBack)
+        Text(
+            modifier = Modifier.padding(top = 16.dp),
+            text = viewModel.statsText().ifBlank { "統計を表示できる履歴がありません" },
+            color = MaterialTheme.colorScheme.onBackground,
+            style = MaterialTheme.typography.bodyLarge
+        )
+        TextButton(onClick = { clipboardManager.setText(AnnotatedString(viewModel.statsText())) }) {
+            Text("統計をコピー")
+        }
+    }
+}
+
+@Composable
+fun SettingsScreen(
+    viewModel: TopScreenViewModel,
+    onBack: () -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        viewModel.setSummaryBackgroundImageUri(uri.toString())
+    }
+    val widgetImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        viewModel.setWidgetBackgroundImageUri(uri.toString())
+    }
+    SettingsContent(
+        appTitle = viewModel.appTitle.observeAsState("SuicaNFC KD").value,
+        accentColorHex = viewModel.accentColorHex.observeAsState("#8AD7C8").value,
+        balanceColorHex = viewModel.balanceColorHex.observeAsState("#8AD7C8").value,
+        summaryBackgroundColorHex = viewModel.summaryBackgroundColorHex.observeAsState("#103F3A").value,
+        noticeBackgroundColorHex = viewModel.noticeBackgroundColorHex.observeAsState("#174F47").value,
+        deleteButtonColorHex = viewModel.deleteButtonColorHex.observeAsState("#533232").value,
+        balanceBackgroundColorHex = viewModel.balanceBackgroundColorHex.observeAsState("#0A2528").value,
+        otherCardBackgroundColorHex = viewModel.otherCardBackgroundColorHex.observeAsState("#101C24").value,
+        widgetBackgroundColorHex = viewModel.widgetBackgroundColorHex.observeAsState("#000000").value,
+        summaryBackgroundImageUri = viewModel.summaryBackgroundImageUri.observeAsState().value,
+        widgetBackgroundImageUri = viewModel.widgetBackgroundImageUri.observeAsState().value,
+        useSearchIcon = viewModel.useSearchIcon.observeAsState(true).value,
+        showLegacySearchBar = viewModel.showLegacySearchBar.observeAsState(false).value,
+        showCardBalances = viewModel.showCardBalances.observeAsState(true).value,
+        useModernUi = viewModel.useModernUi.observeAsState(true).value,
+        showBottomTabLabels = viewModel.showBottomTabLabels.observeAsState(true).value,
+        showDeleteButton = viewModel.showDeleteButton.observeAsState(true).value,
+        showReadNotice = viewModel.showReadNotice.observeAsState(true).value,
+        showStatisticsButton = viewModel.showStatisticsButton.observeAsState(true).value,
+        showPaletteIcon = viewModel.showPaletteIcon.observeAsState(true).value,
+        showMoreMenu = viewModel.showMoreMenu.observeAsState(true).value,
+        featureFlags = viewModel.featureFlags.observeAsState(emptyMap()).value,
+        onDismiss = onBack,
+        onAppTitleSave = viewModel::setAppTitle,
+        onAccentSave = viewModel::setAccentColor,
+        onBalanceColorSave = viewModel::setBalanceColor,
+        onSummaryBackgroundColorSave = viewModel::setSummaryBackgroundColor,
+        onNoticeBackgroundColorSave = viewModel::setNoticeBackgroundColor,
+        onDeleteButtonColorSave = viewModel::setDeleteButtonColor,
+        onBalanceBackgroundColorSave = viewModel::setBalanceBackgroundColor,
+        onOtherCardBackgroundColorSave = viewModel::setOtherCardBackgroundColor,
+        onWidgetBackgroundColorSave = viewModel::setWidgetBackgroundColor,
+        onPickSummaryBackgroundImage = { imagePicker.launch(arrayOf("image/*")) },
+        onClearSummaryBackgroundImage = { viewModel.setSummaryBackgroundImageUri(null) },
+        onPickWidgetBackgroundImage = { widgetImagePicker.launch(arrayOf("image/*")) },
+        onClearWidgetBackgroundImage = { viewModel.setWidgetBackgroundImageUri(null) },
+        onUseSearchIconChanged = viewModel::setUseSearchIcon,
+        onShowLegacySearchBarChanged = viewModel::setShowLegacySearchBar,
+        onShowCardBalancesChanged = viewModel::setShowCardBalances,
+        onUseModernUiChanged = viewModel::setUseModernUi,
+        onShowBottomTabLabelsChanged = viewModel::setShowBottomTabLabels,
+        onShowDeleteButtonChanged = viewModel::setShowDeleteButton,
+        onShowReadNoticeChanged = viewModel::setShowReadNotice,
+        onShowStatisticsButtonChanged = viewModel::setShowStatisticsButton,
+        onShowPaletteIconChanged = viewModel::setShowPaletteIcon,
+        onShowMoreMenuChanged = viewModel::setShowMoreMenu,
+        onFeatureChanged = viewModel::setFeatureEnabled,
+        onExportBackup = { clipboardManager.setText(AnnotatedString(viewModel.exportBackupJson())) },
+        onImportBackup = viewModel::importBackupJson
+    )
+}
+
+@Composable
+private fun PageHeader(title: String, onBack: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 14.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(title, color = MaterialTheme.colorScheme.onBackground, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        TextButton(onClick = onBack) { Text("戻る") }
+    }
+}
+
+@Composable
+private fun SettingsContent(
     appTitle: String,
     accentColorHex: String,
     balanceColorHex: String,
     summaryBackgroundColorHex: String,
     noticeBackgroundColorHex: String,
     deleteButtonColorHex: String,
+    balanceBackgroundColorHex: String,
+    otherCardBackgroundColorHex: String,
+    widgetBackgroundColorHex: String,
+    summaryBackgroundImageUri: String?,
+    widgetBackgroundImageUri: String?,
     useSearchIcon: Boolean,
     showLegacySearchBar: Boolean,
     showCardBalances: Boolean,
+    useModernUi: Boolean,
+    showBottomTabLabels: Boolean,
+    showDeleteButton: Boolean,
+    showReadNotice: Boolean,
+    showStatisticsButton: Boolean,
+    showPaletteIcon: Boolean,
+    showMoreMenu: Boolean,
     featureFlags: Map<String, Boolean>,
     onDismiss: () -> Unit,
     onAppTitleSave: (String) -> Unit,
@@ -1117,9 +1594,23 @@ private fun SettingsDialog(
     onSummaryBackgroundColorSave: (String) -> Unit,
     onNoticeBackgroundColorSave: (String) -> Unit,
     onDeleteButtonColorSave: (String) -> Unit,
+    onBalanceBackgroundColorSave: (String) -> Unit,
+    onOtherCardBackgroundColorSave: (String) -> Unit,
+    onWidgetBackgroundColorSave: (String) -> Unit,
+    onPickSummaryBackgroundImage: () -> Unit,
+    onClearSummaryBackgroundImage: () -> Unit,
+    onPickWidgetBackgroundImage: () -> Unit,
+    onClearWidgetBackgroundImage: () -> Unit,
     onUseSearchIconChanged: (Boolean) -> Unit,
     onShowLegacySearchBarChanged: (Boolean) -> Unit,
     onShowCardBalancesChanged: (Boolean) -> Unit,
+    onUseModernUiChanged: (Boolean) -> Unit,
+    onShowBottomTabLabelsChanged: (Boolean) -> Unit,
+    onShowDeleteButtonChanged: (Boolean) -> Unit,
+    onShowReadNoticeChanged: (Boolean) -> Unit,
+    onShowStatisticsButtonChanged: (Boolean) -> Unit,
+    onShowPaletteIconChanged: (Boolean) -> Unit,
+    onShowMoreMenuChanged: (Boolean) -> Unit,
     onFeatureChanged: (String, Boolean) -> Unit,
     onExportBackup: () -> Unit,
     onImportBackup: (String) -> Boolean
@@ -1130,14 +1621,25 @@ private fun SettingsDialog(
     var summaryBackgroundColor by remember(summaryBackgroundColorHex) { mutableStateOf(summaryBackgroundColorHex) }
     var noticeBackgroundColor by remember(noticeBackgroundColorHex) { mutableStateOf(noticeBackgroundColorHex) }
     var deleteButtonColor by remember(deleteButtonColorHex) { mutableStateOf(deleteButtonColorHex) }
+    var balanceBackgroundColor by remember(balanceBackgroundColorHex) { mutableStateOf(balanceBackgroundColorHex) }
+    var otherCardBackgroundColor by remember(otherCardBackgroundColorHex) { mutableStateOf(otherCardBackgroundColorHex) }
+    var widgetBackgroundColor by remember(widgetBackgroundColorHex) { mutableStateOf(widgetBackgroundColorHex) }
     var backupText by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("設定") },
-        text = {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        PageHeader(title = "設定", onBack = onDismiss)
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
                 item {
                     EditField("アプリ名", title) { title = it }
                 }
@@ -1195,6 +1697,72 @@ private fun SettingsDialog(
                     }
                 }
                 item {
+                    EditField("残高エリア背景カラー (#RRGGBB)", balanceBackgroundColor) { balanceBackgroundColor = it }
+                }
+                item {
+                    Button(
+                        onClick = {
+                            onBalanceBackgroundColorSave(balanceBackgroundColor)
+                            message = "残高エリア背景カラーを保存しました"
+                        },
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("残高エリア背景カラーを保存")
+                    }
+                }
+                item {
+                    EditField("選択外カード背景カラー (#RRGGBB)", otherCardBackgroundColor) { otherCardBackgroundColor = it }
+                }
+                item {
+                    Button(
+                        onClick = {
+                            onOtherCardBackgroundColorSave(otherCardBackgroundColor)
+                            message = "選択外カード背景カラーを保存しました"
+                        },
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("選択外カード背景カラーを保存")
+                    }
+                }
+                item {
+                    EditField("ウィジェット背景カラー (#RRGGBB)", widgetBackgroundColor) { widgetBackgroundColor = it }
+                }
+                item {
+                    Button(
+                        onClick = {
+                            onWidgetBackgroundColorSave(widgetBackgroundColor)
+                            message = "ウィジェット背景カラーを保存しました"
+                        },
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("ウィジェット背景カラーを保存")
+                    }
+                }
+                item {
+                    Button(onClick = onPickWidgetBackgroundImage, shape = RoundedCornerShape(8.dp)) {
+                        Text("ウィジェット背景画像を選択")
+                    }
+                }
+                if (widgetBackgroundImageUri != null) {
+                    item {
+                        OutlinedButton(onClick = onClearWidgetBackgroundImage, shape = RoundedCornerShape(8.dp)) {
+                            Text("ウィジェット背景画像を解除")
+                        }
+                    }
+                }
+                item {
+                    Button(onClick = onPickSummaryBackgroundImage, shape = RoundedCornerShape(8.dp)) {
+                        Text("残高エリア背景画像を選択")
+                    }
+                }
+                if (summaryBackgroundImageUri != null) {
+                    item {
+                        OutlinedButton(onClick = onClearSummaryBackgroundImage, shape = RoundedCornerShape(8.dp)) {
+                            Text("残高エリア背景画像を解除")
+                        }
+                    }
+                }
+                item {
                     EditField("読み取り案内背景カラー (#RRGGBB)", noticeBackgroundColor) { noticeBackgroundColor = it }
                 }
                 item {
@@ -1209,17 +1777,17 @@ private fun SettingsDialog(
                     }
                 }
                 item {
-                    EditField("削除ボタン背景カラー (#RRGGBB)", deleteButtonColor) { deleteButtonColor = it }
+                    EditField("削除アイコンカラー (#RRGGBB)", deleteButtonColor) { deleteButtonColor = it }
                 }
                 item {
                     Button(
                         onClick = {
                             onDeleteButtonColorSave(deleteButtonColor)
-                            message = "削除ボタン背景カラーを保存しました"
+                            message = "削除アイコンカラーを保存しました"
                         },
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("削除ボタン背景カラーを保存")
+                        Text("削除アイコンカラーを保存")
                     }
                 }
                 item {
@@ -1241,6 +1809,55 @@ private fun SettingsDialog(
                         label = "カード別残高を表示",
                         checked = showCardBalances,
                         onCheckedChange = onShowCardBalancesChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "モダンUIを使用",
+                        checked = useModernUi,
+                        onCheckedChange = onUseModernUiChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "下部タブのラベルを表示",
+                        checked = showBottomTabLabels,
+                        onCheckedChange = onShowBottomTabLabelsChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "このカードを削除を表示",
+                        checked = showDeleteButton,
+                        onCheckedChange = onShowDeleteButtonChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "かざしてください案内を表示",
+                        checked = showReadNotice,
+                        onCheckedChange = onShowReadNoticeChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "統計ボタンを表示",
+                        checked = showStatisticsButton,
+                        onCheckedChange = onShowStatisticsButtonChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "パレットアイコンを表示",
+                        checked = showPaletteIcon,
+                        onCheckedChange = onShowPaletteIconChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "上部のその他メニューを表示",
+                        checked = showMoreMenu,
+                        onCheckedChange = onShowMoreMenuChanged
                     )
                 }
                 item {
@@ -1300,12 +1917,8 @@ private fun SettingsDialog(
                         )
                     }
                 }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("閉じる") }
         }
-    )
+    }
 }
 
 @Composable
@@ -1422,6 +2035,32 @@ private fun String.toJapaneseDateLabel(): String {
     val month = parts[1].toIntOrNull() ?: return this
     val day = parts[2].toIntOrNull() ?: return this
     return String.format(Locale.JAPAN, "%d年%d月%d日", year, month, day)
+}
+
+@Composable
+private fun rememberSummaryBackgroundImage(uriText: String?): ImageBitmap? {
+    val context = LocalContext.current
+    return remember(uriText) {
+        uriText?.let { rawUri ->
+            runCatching {
+                val uri = Uri.parse(rawUri)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
+                        val width = info.size.width
+                        val height = info.size.height
+                        val largestSide = maxOf(width, height)
+                        if (largestSide > 2048) {
+                            val ratio = 2048f / largestSide.toFloat()
+                            decoder.setTargetSize((width * ratio).toInt(), (height * ratio).toInt())
+                        }
+                    }.asImageBitmap()
+                } else {
+                    @Suppress("DEPRECATION")
+                    MediaStore.Images.Media.getBitmap(context.contentResolver, uri).asImageBitmap()
+                }
+            }.getOrNull()
+        }
+    }
 }
 
 private fun String.toComposeColor(): Color? {
