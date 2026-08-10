@@ -8,8 +8,8 @@ plugins {
 }
 
 val appId = "io.github.kdroidwin.suicanfc"
-val verCode = 118
-val verId = "1.4.0"
+val verCode = 128
+val verId = "1.5.7"
 val signingProperties = Properties().apply {
     val signingFile = file("keystore.properties")
     require(signingFile.exists()) { "Missing app/keystore.properties for release signing" }
@@ -18,12 +18,12 @@ val signingProperties = Properties().apply {
 
 android {
     namespace = "com.example.suicanfcreader"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = appId
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = verCode
         versionName = verId
 
@@ -90,8 +90,9 @@ android {
         }
     }
     lint {
-        checkReleaseBuilds = false
-        abortOnError = false
+        checkReleaseBuilds = true
+        abortOnError = true
+        warningsAsErrors = true
     }
 }
 
@@ -111,6 +112,11 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.runtime.livedata)
+    implementation(files("libs/security-crypto-1.1.0-alpha06.aar"))
+    implementation(files("libs/tink-android-1.8.0.jar"))
+    implementation(files("libs/gson-2.8.9.jar"))
+    implementation(files("libs/error_prone_annotations-2.18.0.jar"))
+    implementation(files("libs/jsr305-3.0.2.jar"))
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

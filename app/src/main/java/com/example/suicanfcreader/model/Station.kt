@@ -1,6 +1,7 @@
 ﻿package com.example.suicanfcreader.model
 
 import android.content.Context
+import android.util.Log
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStreamReader
@@ -12,6 +13,8 @@ data class Station(
     var company: String = ""
 ) {
     companion object {
+        private const val TAG = "Station"
+
         @Volatile
         private var stationCache: StationCache? = null
         @Volatile
@@ -29,12 +32,11 @@ data class Station(
         }
 
         fun getBusStop(context: Context, lineCode: Int, stationCode: Int): Station? {
-            val lineCodeLow = lineCode and 0xff
-            val stationCodeLow = stationCode and 0xff
-            if (lineCodeLow == 0 && stationCodeLow == 0) return null
-            return loadBusStops(context)
-                .candidates(lineCodeLow, stationCodeLow)
-                .preferred()
+            if (lineCode == 0 && stationCode == 0) return null
+            val cache = loadBusStops(context)
+            return cache.candidates(lineCode, stationCode).preferred()
+                ?: cache.candidates(lineCode, 0).preferred()
+                ?: cache.candidates(lineCode and 0xff, stationCode and 0xff).preferred()
         }
 
         fun resolvePair(
@@ -90,8 +92,8 @@ data class Station(
                         }
                     }
                 }
-            } catch (e: IOException) {
-                e.printStackTrace()
+            } catch (_: IOException) {
+                Log.w(TAG, "Station database could not be loaded")
             }
 
             return StationCache(byAreaLineStation = byAreaLineStation)
@@ -106,8 +108,8 @@ data class Station(
                         br.lineSequence().forEach { line ->
                             val tokens = line.split(",").map { it.trim().trim('"') }
                             if (tokens.size >= 5) {
-                                val lineCode = tokens[0].toIntOrNull(16)?.and(0xff) ?: return@forEach
-                                val stationCode = tokens[1].toIntOrNull(16)?.and(0xff) ?: return@forEach
+                                val lineCode = tokens[0].toIntOrNull(16) ?: return@forEach
+                                val stationCode = tokens[1].toIntOrNull(16) ?: return@forEach
                                 if (lineCode == 0 && stationCode == 0) return@forEach
 
                                 val station = Station(
@@ -121,8 +123,8 @@ data class Station(
                         }
                     }
                 }
-            } catch (e: IOException) {
-                e.printStackTrace()
+            } catch (_: IOException) {
+                Log.w(TAG, "Bus stop database could not be loaded")
             }
 
             return StationCache(byAreaLineStation = byAreaLineStation)

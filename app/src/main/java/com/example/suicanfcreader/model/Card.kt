@@ -21,6 +21,7 @@ data class Card(
     var outCompany: String? = null,
     var memo: String? = null,
     var tags: String? = null,
+    var internalCode: String? = null,
     var manuallyEdited: Boolean = false
 ) {
     companion object {
@@ -66,6 +67,17 @@ data class Card(
                 outStation = outStationDetails?.stationName
                 outCompany = outStationDetails?.company
                 balance = felica.remain.toString()
+                internalCode = if (felica.isBusRecord() && !felica.isChargeRecord() && !felica.isShoppingRecord()) {
+                    "Bus=%04X Stop=%04X".format(felica.busLine, felica.busStop)
+                } else {
+                    "Area=%d In=%d/%d Out=%d/%d".format(
+                        felica.regionCode,
+                        felica.inLine,
+                        felica.inStation,
+                        felica.outLine,
+                        felica.outStation
+                    )
+                }
             }
         }
     }

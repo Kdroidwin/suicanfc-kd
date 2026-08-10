@@ -14,6 +14,7 @@ import android.os.Build
 import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
+import com.example.suicanfcreader.storage.SecurePreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -32,7 +33,7 @@ class BalanceWidgetProvider : AppWidgetProvider() {
     }
 
     internal fun buildViews(context: Context): RemoteViews {
-        val prefs = context.getSharedPreferences("suica_reader_history", Context.MODE_PRIVATE)
+        val prefs = SecurePreferences.open(context)
         val cards = runCatching {
             val array = JSONArray(prefs.getString("history", "[]") ?: "[]")
             List(array.length()) { index -> array.getJSONObject(index) }
@@ -85,7 +86,9 @@ class BalanceWidgetProvider : AppWidgetProvider() {
         lines: String,
         details: String
     ): Bitmap? = runCatching {
-        val source = decodeBoundedBitmap(context, Uri.parse(uriText)) ?: return null
+        val uri = Uri.parse(uriText)
+        if (!isTrustedWidgetImageUri(context, uri)) return null
+        val source = decodeBoundedBitmap(context, uri) ?: return null
         val width = 1200
         val height = 600
         val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -129,6 +132,17 @@ class BalanceWidgetProvider : AppWidgetProvider() {
         }
     }
 
+    private fun isTrustedWidgetImageUri(context: Context, uri: Uri): Boolean = runCatching {
+        require(uri.scheme == "content" && !uri.authority.isNullOrBlank())
+        require(context.contentResolver.persistedUriPermissions.any { permission ->
+            permission.isReadPermission && permission.uri == uri
+        })
+        require(context.contentResolver.getType(uri)?.lowercase(Locale.ROOT)?.startsWith("image/") == true)
+        val length = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+        require(length < 0 || length <= MAX_WIDGET_IMAGE_BYTES)
+        true
+    }.getOrDefault(false)
+
     private fun String?.formatYen(): String {
         val value = this?.toIntOrNull() ?: return "¥--"
         return String.format(Locale.JAPAN, "¥%,d", value)
@@ -145,6 +159,8 @@ class BalanceWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
+        private const val MAX_WIDGET_IMAGE_BYTES = 20L * 1024L * 1024L
+
         fun requestUpdate(context: Context) {
             val manager = AppWidgetManager.getInstance(context)
             val component = ComponentName(context, BalanceWidgetProvider::class.java)

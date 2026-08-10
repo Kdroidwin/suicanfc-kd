@@ -70,6 +70,14 @@ class SuicaReader {
 
     fun isBusRecord(): Boolean = isBus(procId)
 
+    fun hasPlausibleHistoryValues(): Boolean {
+        if (year !in 0..99 || month !in 1..12 || day !in 1..daysInMonth(year, month)) return false
+        if (remain !in 0..MAX_TRANSIT_BALANCE) return false
+        return inLine in BYTE_VALUE_RANGE && inStation in BYTE_VALUE_RANGE &&
+            outLine in BYTE_VALUE_RANGE && outStation in BYTE_VALUE_RANGE &&
+            regionCode in BYTE_VALUE_RANGE && busLine in BUS_CODE_RANGE && busStop in BUS_CODE_RANGE
+    }
+
     private fun isCharge(value: Int): Boolean = value == 2 || value == 31 || value == 72 || value == 73
 
     private fun isShopping(value: Int): Boolean = value == 70 || value == 74 || value == 75 || value == 198 || value == 203
@@ -129,5 +137,15 @@ class SuicaReader {
         }
 
         private fun unsigned(value: Byte): Int = value.toInt() and 0x0ff
+
+        private fun daysInMonth(year: Int, month: Int): Int = when (month) {
+            2 -> if (year % 4 == 0) 29 else 28
+            4, 6, 9, 11 -> 30
+            else -> 31
+        }
+
+        private val BYTE_VALUE_RANGE = 0..0xff
+        private val BUS_CODE_RANGE = 0..0xffff
+        private const val MAX_TRANSIT_BALANCE = 20_000
     }
 }

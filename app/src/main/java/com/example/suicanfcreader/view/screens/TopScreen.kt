@@ -1,6 +1,8 @@
 ﻿package com.example.suicanfcreader.view.screens
 
+import android.content.ContentResolver
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
@@ -12,17 +14,23 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -91,6 +99,8 @@ fun TopScreen(
     val balanceBackgroundColorHex = topScreenViewModel.balanceBackgroundColorHex.observeAsState("#0A2528")
     val otherCardBackgroundColorHex = topScreenViewModel.otherCardBackgroundColorHex.observeAsState("#101C24")
     val summaryBackgroundImageUri = topScreenViewModel.summaryBackgroundImageUri.observeAsState()
+    val defaultBackgroundImageUri = topScreenViewModel.defaultBackgroundImageUri.observeAsState()
+    val cardBackgroundImageUris = topScreenViewModel.cardBackgroundImageUris.observeAsState(emptyMap())
     val showLegacySearchBar = topScreenViewModel.showLegacySearchBar.observeAsState(false)
     val searchDialogVisible = topScreenViewModel.searchDialogVisible.observeAsState(false)
     val showCardBalances = topScreenViewModel.showCardBalances.observeAsState(true)
@@ -98,6 +108,8 @@ fun TopScreen(
     val showDeleteButton = topScreenViewModel.showDeleteButton.observeAsState(true)
     val showReadNotice = topScreenViewModel.showReadNotice.observeAsState(true)
     val showStatisticsButton = topScreenViewModel.showStatisticsButton.observeAsState(true)
+    val showInternalCodes = topScreenViewModel.showInternalCodes.observeAsState(false)
+    val showHistoryHeader = topScreenViewModel.showHistoryHeader.observeAsState(true)
     val readCardIds = topScreenViewModel.readCardIds.observeAsState(emptySet())
     val clipboardManager: ClipboardManager = LocalClipboardManager.current
     val selectedSummary = summaries.value.firstOrNull { it.cardId == selectedCardId.value }
@@ -158,23 +170,39 @@ fun TopScreen(
 
         item {
             if (useModernUi.value && summaries.value.size > 1) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    balanceSummaryContent(Modifier.weight(2f))
-                    ModernSideCards(
-                        modifier = Modifier.weight(1f),
-                        summaries = summaries.value,
-                        selectedCardId = selectedCardId.value,
-                        balanceColor = balanceColor,
-                        backgroundColor = otherCardBackgroundColor,
-                        onSelectCard = topScreenViewModel::selectCard
-                    )
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val mainWidth = (maxWidth - 10.dp) * (2f / 3f)
+                    val mainHeight = mainWidth * (9f / 16f)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        balanceSummaryContent(
+                            Modifier
+                                .width(mainWidth)
+                                .requiredHeight(mainHeight)
+                        )
+                        ModernSideCards(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(mainHeight),
+                            summaries = summaries.value,
+                            selectedCardId = selectedCardId.value,
+                            balanceColor = balanceColor,
+                            backgroundColor = otherCardBackgroundColor,
+                            cardBackgroundImageUris = cardBackgroundImageUris.value,
+                            defaultBackgroundImageUri = defaultBackgroundImageUri.value,
+                            onSelectCard = topScreenViewModel::selectCard
+                        )
+                    }
                 }
             } else {
-                balanceSummaryContent(Modifier.fillMaxWidth())
+                balanceSummaryContent(
+                    Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                )
             }
         }
 
@@ -200,6 +228,7 @@ fun TopScreen(
                     isRead = summary.cardId in readCardIds.value,
                     balanceColor = balanceColor,
                     otherCardBackgroundColor = otherCardBackgroundColor,
+                    backgroundImageUri = cardBackgroundImageUris.value[summary.cardId] ?: defaultBackgroundImageUri.value,
                     onClick = { topScreenViewModel.selectCard(summary.cardId) }
                 )
             }
@@ -217,11 +246,13 @@ fun TopScreen(
             }
         }
 
-        item {
-            SectionHeader(
-                title = "選択中カードの履歴",
-                supportingText = "${selectedHistory.value.size}件"
-            )
+        if (showHistoryHeader.value) {
+            item {
+                SectionHeader(
+                    title = "選択中カードの履歴",
+                    supportingText = "${selectedHistory.value.size}件"
+                )
+            }
         }
 
         if (selectedHistory.value.isEmpty()) {
@@ -238,6 +269,7 @@ fun TopScreen(
                         ModernHistoryItem(
                             card = card,
                             balanceColor = balanceColor,
+                            showInternalCodes = showInternalCodes.value,
                             onEdit = { editingRecord = card }
                         )
                     } else {
@@ -246,6 +278,7 @@ fun TopScreen(
                             index = index + 1,
                             isLatest = index == 0,
                             balanceColor = balanceColor,
+                            showInternalCodes = showInternalCodes.value,
                             onEdit = { editingRecord = card }
                         )
                     }
@@ -397,39 +430,58 @@ private fun ModernSideCards(
     selectedCardId: String?,
     balanceColor: Color,
     backgroundColor: Color,
+    cardBackgroundImageUris: Map<String, String>,
+    defaultBackgroundImageUri: String?,
     onSelectCard: (String) -> Unit
 ) {
-    val otherCards = summaries.filter { it.cardId != selectedCardId }.take(2)
+    val otherCards = summaries.filter { it.cardId != selectedCardId }
+    val requiresScroll = otherCards.size > 1
+    val scrollState = rememberScrollState()
     Column(
-        modifier = modifier,
+        modifier = if (requiresScroll) modifier.verticalScroll(scrollState) else modifier,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         otherCards.forEach { summary ->
+            val backgroundImage = rememberSummaryBackgroundImage(
+                cardBackgroundImageUris[summary.cardId] ?: defaultBackgroundImageUri
+            )
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(72.dp)
                     .clickable { onSelectCard(summary.cardId) },
                 shape = RoundedCornerShape(8.dp),
                 colors = CardDefaults.cardColors(containerColor = backgroundColor),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = summary.title,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.labelLarge,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = summary.latestRecord.balanceText(),
-                        color = balanceColor,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+                Box {
+                    if (backgroundImage != null) {
+                        Image(
+                            bitmap = backgroundImage,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                            alpha = 0.42f
+                        )
+                    }
+                    Column(
+                        modifier = Modifier.padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = summary.title,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = summary.latestRecord.balanceText(),
+                            color = balanceColor,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }
@@ -458,7 +510,7 @@ private fun BalanceSummary(
     canCopy: Boolean
 ) {
     Card(
-        modifier = modifier.aspectRatio(16f / 9f),
+        modifier = modifier,
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = balanceBackgroundColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
@@ -469,7 +521,7 @@ private fun BalanceSummary(
                     bitmap = summaryBackgroundImage,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit,
+                    contentScale = ContentScale.Crop,
                     alpha = 0.72f
                 )
             }
@@ -602,8 +654,10 @@ private fun CardBalanceRow(
     isRead: Boolean,
     balanceColor: Color,
     otherCardBackgroundColor: Color,
+    backgroundImageUri: String?,
     onClick: () -> Unit
 ) {
+    val backgroundImage = rememberSummaryBackgroundImage(backgroundImageUri)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -614,40 +668,51 @@ private fun CardBalanceRow(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = summary.title,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "${summary.recordCount}件 / ${summary.latestRecord.date ?: "-"}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall
+        Box {
+            if (backgroundImage != null) {
+                Image(
+                    bitmap = backgroundImage,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    alpha = 0.32f
                 )
             }
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                StatusDot(isActive = isRead)
-                Text(
-                    text = summary.latestRecord.balanceText(),
-                    color = balanceColor,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = summary.title,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "${summary.recordCount}件 / ${summary.latestRecord.date ?: "-"}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StatusDot(isActive = isRead)
+                    Text(
+                        text = summary.latestRecord.balanceText(),
+                        color = balanceColor,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }
@@ -852,6 +917,7 @@ private fun DateHeader(text: String) {
 private fun ModernHistoryItem(
     card: TransitHistoryRecord,
     balanceColor: Color,
+    showInternalCodes: Boolean,
     onEdit: () -> Unit
 ) {
     val special = card.isSpecialActivity()
@@ -914,6 +980,15 @@ private fun ModernHistoryItem(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    if (showInternalCodes && !card.internalCode.isNullOrBlank()) {
+                        Text(
+                            text = card.internalCode.orEmpty(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     if (!card.memo.isNullOrBlank() || !card.tags.isNullOrBlank()) {
                         Text(
                             text = listOfNotNull(card.memo, card.tags?.let { "#$it" }).joinToString("  "),
@@ -1000,6 +1075,7 @@ private fun HistoryCard(
     index: Int,
     isLatest: Boolean,
     balanceColor: Color,
+    showInternalCodes: Boolean,
     onEdit: () -> Unit
 ) {
     Card(
@@ -1118,6 +1194,13 @@ private fun HistoryCard(
                     }
                 } else {
                     ActivityLine(card = card)
+                }
+                if (showInternalCodes && !card.internalCode.isNullOrBlank()) {
+                    Text(
+                        text = card.internalCode.orEmpty(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall
+                    )
                 }
                 if (!card.memo.isNullOrBlank() || !card.tags.isNullOrBlank()) {
                     Text(
@@ -1480,21 +1563,22 @@ fun SettingsScreen(
     viewModel: TopScreenViewModel,
     onBack: () -> Unit
 ) {
-    val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        viewModel.setSummaryBackgroundImageUri(uri.toString())
+        uri?.let { persistSafeImageUri(context, it) }?.let(viewModel::setSummaryBackgroundImageUri)
     }
     val widgetImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        viewModel.setWidgetBackgroundImageUri(uri.toString())
+        uri?.let { persistSafeImageUri(context, it) }?.let(viewModel::setWidgetBackgroundImageUri)
+    }
+    val backupSaveLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        uri?.let { writeBackupFile(context, it, viewModel.exportBackupJson()) }
+    }
+    val backupImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        readBackupFile(context, uri)?.let(viewModel::importBackupJson)
     }
     SettingsContent(
         appTitle = viewModel.appTitle.observeAsState("SuicaNFC KD").value,
@@ -1518,6 +1602,9 @@ fun SettingsScreen(
         showStatisticsButton = viewModel.showStatisticsButton.observeAsState(true).value,
         showPaletteIcon = viewModel.showPaletteIcon.observeAsState(true).value,
         showMoreMenu = viewModel.showMoreMenu.observeAsState(true).value,
+        showInternalCodes = viewModel.showInternalCodes.observeAsState(false).value,
+        showHistoryHeader = viewModel.showHistoryHeader.observeAsState(true).value,
+        demoMode = viewModel.demoMode.observeAsState(false).value,
         featureFlags = viewModel.featureFlags.observeAsState(emptyMap()).value,
         onDismiss = onBack,
         onAppTitleSave = viewModel::setAppTitle,
@@ -1531,6 +1618,7 @@ fun SettingsScreen(
         onWidgetBackgroundColorSave = viewModel::setWidgetBackgroundColor,
         onPickSummaryBackgroundImage = { imagePicker.launch(arrayOf("image/*")) },
         onClearSummaryBackgroundImage = { viewModel.setSummaryBackgroundImageUri(null) },
+        onClearAllBackgroundImages = viewModel::clearAllBackgroundImages,
         onPickWidgetBackgroundImage = { widgetImagePicker.launch(arrayOf("image/*")) },
         onClearWidgetBackgroundImage = { viewModel.setWidgetBackgroundImageUri(null) },
         onUseSearchIconChanged = viewModel::setUseSearchIcon,
@@ -1543,8 +1631,12 @@ fun SettingsScreen(
         onShowStatisticsButtonChanged = viewModel::setShowStatisticsButton,
         onShowPaletteIconChanged = viewModel::setShowPaletteIcon,
         onShowMoreMenuChanged = viewModel::setShowMoreMenu,
+        onShowInternalCodesChanged = viewModel::setShowInternalCodes,
+        onShowHistoryHeaderChanged = viewModel::setShowHistoryHeader,
+        onDemoModeChanged = viewModel::setDemoMode,
         onFeatureChanged = viewModel::setFeatureEnabled,
-        onExportBackup = { clipboardManager.setText(AnnotatedString(viewModel.exportBackupJson())) },
+        onExportBackup = { backupSaveLauncher.launch("suicanfc-kd-backup.json") },
+        onImportBackupFile = { backupImportLauncher.launch(arrayOf("application/json", "text/plain")) },
         onImportBackup = viewModel::importBackupJson
     )
 }
@@ -1586,6 +1678,9 @@ private fun SettingsContent(
     showStatisticsButton: Boolean,
     showPaletteIcon: Boolean,
     showMoreMenu: Boolean,
+    showInternalCodes: Boolean,
+    showHistoryHeader: Boolean,
+    demoMode: Boolean,
     featureFlags: Map<String, Boolean>,
     onDismiss: () -> Unit,
     onAppTitleSave: (String) -> Unit,
@@ -1599,6 +1694,7 @@ private fun SettingsContent(
     onWidgetBackgroundColorSave: (String) -> Unit,
     onPickSummaryBackgroundImage: () -> Unit,
     onClearSummaryBackgroundImage: () -> Unit,
+    onClearAllBackgroundImages: () -> Unit,
     onPickWidgetBackgroundImage: () -> Unit,
     onClearWidgetBackgroundImage: () -> Unit,
     onUseSearchIconChanged: (Boolean) -> Unit,
@@ -1611,8 +1707,12 @@ private fun SettingsContent(
     onShowStatisticsButtonChanged: (Boolean) -> Unit,
     onShowPaletteIconChanged: (Boolean) -> Unit,
     onShowMoreMenuChanged: (Boolean) -> Unit,
+    onShowInternalCodesChanged: (Boolean) -> Unit,
+    onShowHistoryHeaderChanged: (Boolean) -> Unit,
+    onDemoModeChanged: (Boolean) -> Unit,
     onFeatureChanged: (String, Boolean) -> Unit,
     onExportBackup: () -> Unit,
+    onImportBackupFile: () -> Unit,
     onImportBackup: (String) -> Boolean
 ) {
     var title by remember(appTitle) { mutableStateOf(appTitle) }
@@ -1752,14 +1852,19 @@ private fun SettingsContent(
                 }
                 item {
                     Button(onClick = onPickSummaryBackgroundImage, shape = RoundedCornerShape(8.dp)) {
-                        Text("残高エリア背景画像を選択")
+                        Text("選択中カードの残高背景画像を選択")
                     }
                 }
                 if (summaryBackgroundImageUri != null) {
                     item {
                         OutlinedButton(onClick = onClearSummaryBackgroundImage, shape = RoundedCornerShape(8.dp)) {
-                            Text("残高エリア背景画像を解除")
+                            Text("選択中カードの残高背景画像を解除")
                         }
+                    }
+                }
+                item {
+                    OutlinedButton(onClick = onClearAllBackgroundImages, shape = RoundedCornerShape(8.dp)) {
+                        Text("すべての背景画像を解除")
                     }
                 }
                 item {
@@ -1820,6 +1925,13 @@ private fun SettingsContent(
                 }
                 item {
                     FeatureFlagRow(
+                        label = "デモモード（実データを変更しない）",
+                        checked = demoMode,
+                        onCheckedChange = onDemoModeChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
                         label = "下部タブのラベルを表示",
                         checked = showBottomTabLabels,
                         onCheckedChange = onShowBottomTabLabelsChanged
@@ -1861,6 +1973,20 @@ private fun SettingsContent(
                     )
                 }
                 item {
+                    FeatureFlagRow(
+                        label = "駅・バス停の内部コードを表示",
+                        checked = showInternalCodes,
+                        onCheckedChange = onShowInternalCodesChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "履歴の見出しと件数を表示",
+                        checked = showHistoryHeader,
+                        onCheckedChange = onShowHistoryHeaderChanged
+                    )
+                }
+                item {
                     Text(
                         text = "追加機能はデフォルトで有効です。",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1878,11 +2004,16 @@ private fun SettingsContent(
                     Button(
                         onClick = {
                             onExportBackup()
-                            message = "バックアップJSONをコピーしました"
+                            message = "保存先を選択してください"
                         },
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("バックアップをコピー")
+                        Text("バックアップをファイルに保存")
+                    }
+                }
+                item {
+                    OutlinedButton(onClick = onImportBackupFile, shape = RoundedCornerShape(8.dp)) {
+                        Text("バックアップファイルを読み込む")
                     }
                 }
                 item {
@@ -2044,6 +2175,7 @@ private fun rememberSummaryBackgroundImage(uriText: String?): ImageBitmap? {
         uriText?.let { rawUri ->
             runCatching {
                 val uri = Uri.parse(rawUri)
+                require(isSafeImageUri(context, uri))
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
                         val width = info.size.width
@@ -2062,6 +2194,62 @@ private fun rememberSummaryBackgroundImage(uriText: String?): ImageBitmap? {
         }
     }
 }
+
+private fun persistSafeImageUri(context: android.content.Context, uri: Uri): String? {
+    if (!isSafeImageUri(context, uri)) return null
+    val persisted = runCatching {
+        context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }.isSuccess
+    return uri.toString().takeIf { persisted }
+}
+
+private fun writeBackupFile(context: android.content.Context, uri: Uri, content: String): Boolean = runCatching {
+    require(uri.scheme == ContentResolver.SCHEME_CONTENT)
+    context.contentResolver.openOutputStream(uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { writer ->
+        writer.write(content)
+    } ?: error("Could not open backup destination")
+}.isSuccess
+
+private fun readBackupFile(context: android.content.Context, uri: Uri?): String? = runCatching {
+    val sourceUri = requireNotNull(uri)
+    require(sourceUri.scheme == ContentResolver.SCHEME_CONTENT)
+    val mimeType = context.contentResolver.getType(sourceUri)?.lowercase(Locale.ROOT)
+    require(mimeType == "application/json" || mimeType == "text/json" || mimeType == "text/plain")
+    val length = context.contentResolver.openAssetFileDescriptor(sourceUri, "r")?.use { it.length } ?: -1L
+    require(length < 0 || length <= MAX_BACKUP_FILE_BYTES)
+    context.contentResolver.openInputStream(sourceUri)?.bufferedReader(Charsets.UTF_8)?.use { reader ->
+        buildString {
+            val buffer = CharArray(8_192)
+            var totalChars = 0
+            while (totalChars <= MAX_BACKUP_FILE_BYTES) {
+                val read = reader.read(buffer)
+                if (read < 0) break
+                totalChars += read
+                require(totalChars <= MAX_BACKUP_FILE_BYTES) { "Backup is too large" }
+                append(buffer, 0, read)
+            }
+        }
+    } ?: error("Could not open backup source")
+}.getOrNull()
+
+private fun isSafeImageUri(context: android.content.Context, uri: Uri): Boolean = runCatching {
+    require(uri.scheme == ContentResolver.SCHEME_CONTENT)
+    val mimeType = context.contentResolver.getType(uri)?.lowercase(Locale.ROOT)
+    require(mimeType?.startsWith("image/") == true)
+    val length = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+    require(length < 0 || length <= MAX_BACKGROUND_IMAGE_BYTES)
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    require(bounds.outWidth in 1..MAX_BACKGROUND_IMAGE_DIMENSION)
+    require(bounds.outHeight in 1..MAX_BACKGROUND_IMAGE_DIMENSION)
+    require(bounds.outWidth.toLong() * bounds.outHeight <= MAX_BACKGROUND_IMAGE_PIXELS)
+    true
+}.getOrDefault(false)
+
+private const val MAX_BACKGROUND_IMAGE_BYTES = 20L * 1024L * 1024L
+private const val MAX_BACKUP_FILE_BYTES = 2 * 1024 * 1024
+private const val MAX_BACKGROUND_IMAGE_DIMENSION = 8_192
+private const val MAX_BACKGROUND_IMAGE_PIXELS = 24_000_000L
 
 private fun String.toComposeColor(): Color? {
     val normalized = trim().removePrefix("#")

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.net.Uri
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.NfcF
@@ -18,6 +19,7 @@ import com.example.suicanfcreader.lib.SuicaReader
 import com.example.suicanfcreader.model.AppThemeMode
 import com.example.suicanfcreader.model.Card
 import com.example.suicanfcreader.model.SuicaCardSummary
+import com.example.suicanfcreader.storage.SecurePreferences
 import com.example.suicanfcreader.widget.BalanceWidgetProvider
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -33,11 +35,13 @@ class TopScreenViewModel(
     private val appContext = context.applicationContext
     private val nfcAdapter: NfcAdapter? = NfcAdapter.getDefaultAdapter(appContext)
     private val preferences: SharedPreferences =
-        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        SecurePreferences.open(appContext)
 
-    private val initialHistory = loadHistory()
+    private val initialDemoMode = preferences.getBoolean(KEY_DEMO_MODE, false)
+    private val initialHistory = if (initialDemoMode) demoHistory() else loadHistory()
     private val initialSelectedCardId =
         preferences.getString(KEY_SELECTED_CARD_ID, null)
+            ?.takeIf { selectedId -> initialHistory.any { it.resolvedCardId() == selectedId } }
             ?: buildSummaries(initialHistory).firstOrNull()?.cardId
 
     private val _nfcData = MutableLiveData("")
@@ -108,8 +112,16 @@ class TopScreenViewModel(
     val widgetBackgroundColorHex: LiveData<String> = _widgetBackgroundColorHex
 
     private val _summaryBackgroundImageUri =
-        MutableLiveData(preferences.getString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, null))
+        MutableLiveData(cardBackgroundUriFor(initialSelectedCardId))
     val summaryBackgroundImageUri: LiveData<String?> = _summaryBackgroundImageUri
+
+    private val _defaultBackgroundImageUri = MutableLiveData(
+        trustedPersistedImageUriOrNull(preferences.getString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, null))
+    )
+    val defaultBackgroundImageUri: LiveData<String?> = _defaultBackgroundImageUri
+
+    private val _cardBackgroundImageUris = MutableLiveData(loadCardBackgroundImageUris())
+    val cardBackgroundImageUris: LiveData<Map<String, String>> = _cardBackgroundImageUris
 
     private val _widgetBackgroundImageUri =
         MutableLiveData(preferences.getString(KEY_WIDGET_BACKGROUND_IMAGE_URI, null))
@@ -164,6 +176,17 @@ class TopScreenViewModel(
         MutableLiveData(preferences.getBoolean(KEY_SHOW_MORE_MENU, true))
     val showMoreMenu: LiveData<Boolean> = _showMoreMenu
 
+    private val _showInternalCodes =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_INTERNAL_CODES, false))
+    val showInternalCodes: LiveData<Boolean> = _showInternalCodes
+
+    private val _showHistoryHeader =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_HISTORY_HEADER, true))
+    val showHistoryHeader: LiveData<Boolean> = _showHistoryHeader
+
+    private val _demoMode = MutableLiveData(initialDemoMode)
+    val demoMode: LiveData<Boolean> = _demoMode
+
     private val _statsDialogVisible = MutableLiveData(false)
     val statsDialogVisible: LiveData<Boolean> = _statsDialogVisible
 
@@ -174,6 +197,7 @@ class TopScreenViewModel(
     val featureFlags: LiveData<Map<String, Boolean>> = _featureFlags
 
     init {
+        migrateBackgroundImageFallback()
         BalanceWidgetProvider.requestUpdate(appContext)
     }
 
@@ -206,6 +230,11 @@ class TopScreenViewModel(
     }
 
     fun handleNfcIntent(intent: Intent?, context: Context) {
+        if (_demoMode.value == true) {
+            _nfcData.value = "デモモード中はNFC読み取りを行いません"
+            _isDataRefreshed.value = true
+            return
+        }
         val action = intent?.action ?: return
         if (action !in NFC_ACTIONS) return
 
@@ -234,12 +263,12 @@ class TopScreenViewModel(
 
     fun selectCard(cardId: String) {
         setSelectedCard(cardId)
-        refreshDerivedState(loadHistory(), cardId)
+        refreshDerivedState(activeHistory(), cardId)
     }
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
-        _selectedHistory.value = filterHistory(loadHistory(), _selectedCardId.value, query)
+        _selectedHistory.value = filterHistory(activeHistory(), _selectedCardId.value, query)
     }
 
     fun setThemeMode(mode: AppThemeMode) {
@@ -296,14 +325,50 @@ class TopScreenViewModel(
     }
 
     fun setSummaryBackgroundImageUri(uri: String?) {
-        preferences.edit().putString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, uri).apply()
+        val cardId = _selectedCardId.value ?: return
+        if (uri != null && !isTrustedPersistedImageUri(uri)) return
+        val backgrounds = loadCardBackgroundImages()
+        backgrounds.put(cardId, uri ?: NO_BACKGROUND_IMAGE)
+        val editor = preferences.edit().putString(KEY_CARD_BACKGROUND_IMAGES, backgrounds.toString())
+        if (uri == null) {
+            editor.remove(KEY_SUMMARY_BACKGROUND_IMAGE_URI)
+        } else {
+            editor.putString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, uri)
+        }
+        editor.apply()
         _summaryBackgroundImageUri.value = uri
+        _defaultBackgroundImageUri.value = uri
+        _cardBackgroundImageUris.value = loadCardBackgroundImageUris()
     }
 
     fun setWidgetBackgroundImageUri(uri: String?) {
+        if (uri != null && !isTrustedPersistedImageUri(uri)) return
         preferences.edit().putString(KEY_WIDGET_BACKGROUND_IMAGE_URI, uri).apply()
         _widgetBackgroundImageUri.value = uri
         BalanceWidgetProvider.requestUpdate(appContext)
+    }
+
+    fun clearAllBackgroundImages() {
+        preferences.edit()
+            .remove(KEY_CARD_BACKGROUND_IMAGES)
+            .remove(KEY_SUMMARY_BACKGROUND_IMAGE_URI)
+            .remove(KEY_WIDGET_BACKGROUND_IMAGE_URI)
+            .apply()
+        _summaryBackgroundImageUri.value = null
+        _defaultBackgroundImageUri.value = null
+        _cardBackgroundImageUris.value = emptyMap()
+        _widgetBackgroundImageUri.value = null
+        BalanceWidgetProvider.requestUpdate(appContext)
+    }
+
+    fun setDemoMode(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_DEMO_MODE, enabled).apply()
+        _demoMode.value = enabled
+        _readCardIds.value = emptySet()
+        _latestCards.value = emptyList()
+        _nfcData.value = ""
+        _isDataRefreshed.value = false
+        refreshDerivedState(activeHistory(), _selectedCardId.value)
     }
 
     fun setUseSearchIcon(enabled: Boolean) {
@@ -371,6 +436,16 @@ class TopScreenViewModel(
         _showMoreMenu.value = show
     }
 
+    fun setShowInternalCodes(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_INTERNAL_CODES, show).apply()
+        _showInternalCodes.value = show
+    }
+
+    fun setShowHistoryHeader(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_HISTORY_HEADER, show).apply()
+        _showHistoryHeader.value = show
+    }
+
     fun showStatsDialog() {
         _statsDialogVisible.value = true
     }
@@ -405,10 +480,11 @@ class TopScreenViewModel(
         }
         saveAliases(aliases)
         BalanceWidgetProvider.requestUpdate(appContext)
-        refreshDerivedState(loadHistory(), cardId)
+        refreshDerivedState(activeHistory(), cardId)
     }
 
     fun updateRecord(originalNumber: String?, updated: Card) {
+        if (_demoMode.value == true) return
         val selectedCardId = _selectedCardId.value ?: return
         val updatedHistory = loadHistory().map { card ->
             if (card.resolvedCardId() == selectedCardId && card.number == originalNumber) {
@@ -423,7 +499,7 @@ class TopScreenViewModel(
 
     fun exportSelectedJson(): String {
         val array = JSONArray()
-        filterHistory(loadHistory(), _selectedCardId.value, _searchQuery.value.orEmpty())
+        filterHistory(activeHistory(), _selectedCardId.value, _searchQuery.value.orEmpty())
             .forEach { card -> array.put(card.toJson()) }
         return array.toString(2)
     }
@@ -432,9 +508,9 @@ class TopScreenViewModel(
         val header = listOf(
             "date", "amount", "balance", "action", "device",
             "in_company", "in_line", "in_station", "out_company", "out_line", "out_station",
-            "memo", "tags", "number"
+            "memo", "tags", "internal_code", "number"
         ).joinToString(",")
-        val rows = filterHistory(loadHistory(), _selectedCardId.value, _searchQuery.value.orEmpty())
+        val rows = filterHistory(activeHistory(), _selectedCardId.value, _searchQuery.value.orEmpty())
             .joinToString("\n") { card ->
                 listOf(
                     card.date,
@@ -450,6 +526,7 @@ class TopScreenViewModel(
                     card.outStation,
                     card.memo,
                     card.tags,
+                    card.internalCode,
                     card.number
                 ).joinToString(",") { it.csvEscape() }
             }
@@ -457,7 +534,7 @@ class TopScreenViewModel(
     }
 
     fun exportSelectedNotionMarkdown(): String {
-        val rows = filterHistory(loadHistory(), _selectedCardId.value, _searchQuery.value.orEmpty())
+        val rows = filterHistory(activeHistory(), _selectedCardId.value, _searchQuery.value.orEmpty())
         val header = "| 日付 | 差額 | 残高 | タイトル | 場所 | メモ | タグ |\n|---|---:|---:|---|---|---|---|"
         val body = rows.joinToString("\n") { card ->
             val place = listOf(card.inStation, card.outStation).filterNot { it.isNullOrBlank() }.joinToString(" -> ")
@@ -467,7 +544,7 @@ class TopScreenViewModel(
     }
 
     fun statsText(): String {
-        val rows = filterHistory(loadHistory(), _selectedCardId.value, "")
+        val rows = filterHistory(activeHistory(), _selectedCardId.value, "")
         val spending = rows.sumOf { card ->
             val amount = card.amount?.toIntOrNull() ?: 0
             if (amount < 0) -amount else 0
@@ -516,8 +593,12 @@ class TopScreenViewModel(
             put("balanceBackgroundColor", _balanceBackgroundColorHex.value ?: DEFAULT_BALANCE_BACKGROUND_COLOR)
             put("otherCardBackgroundColor", _otherCardBackgroundColorHex.value ?: DEFAULT_OTHER_CARD_BACKGROUND_COLOR)
             put("widgetBackgroundColor", _widgetBackgroundColorHex.value ?: DEFAULT_WIDGET_BACKGROUND_COLOR)
-            put("summaryBackgroundImageUri", _summaryBackgroundImageUri.value)
-            put("widgetBackgroundImageUri", _widgetBackgroundImageUri.value)
+            put(
+                "summaryBackgroundImageUri",
+                trustedPersistedImageUriOrNull(preferences.getString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, null))
+            )
+            put("cardBackgroundImages", loadCardBackgroundImages())
+            put("widgetBackgroundImageUri", trustedPersistedImageUriOrNull(_widgetBackgroundImageUri.value))
             put("useSearchIcon", _useSearchIcon.value ?: true)
             put("showLegacySearchBar", _showLegacySearchBar.value ?: false)
             put("showCardBalances", _showCardBalances.value ?: true)
@@ -528,6 +609,8 @@ class TopScreenViewModel(
             put("showStatisticsButton", _showStatisticsButton.value ?: true)
             put("showPaletteIcon", _showPaletteIcon.value ?: true)
             put("showMoreMenu", _showMoreMenu.value ?: true)
+            put("showInternalCodes", _showInternalCodes.value ?: false)
+            put("showHistoryHeader", _showHistoryHeader.value ?: true)
             put("features", JSONObject(preferences.getString(KEY_FEATURE_FLAGS, "{}") ?: "{}"))
         }.toString(2)
     }
@@ -538,6 +621,13 @@ class TopScreenViewModel(
             val obj = JSONObject(rawJson)
             val history = obj.optJSONArray("history") ?: JSONArray()
             require(history.length() <= MAX_HISTORY_ITEMS) { "Too many history records" }
+            val summaryImageUri = trustedPersistedImageUriOrNull(
+                obj.optString("summaryBackgroundImageUri").ifBlank { null }
+            )
+            val widgetImageUri = trustedPersistedImageUriOrNull(
+                obj.optString("widgetBackgroundImageUri").ifBlank { null }
+            )
+            val cardBackgrounds = sanitizeCardBackgroundImages(obj.optJSONObject("cardBackgroundImages"))
             preferences.edit()
                 .putString(KEY_HISTORY, history.toString())
                 .putString(KEY_CARD_ALIASES, obj.optJSONObject("cardAliases")?.toString() ?: "{}")
@@ -551,8 +641,9 @@ class TopScreenViewModel(
                 .putString(KEY_BALANCE_BACKGROUND_COLOR, obj.optString("balanceBackgroundColor", DEFAULT_BALANCE_BACKGROUND_COLOR))
                 .putString(KEY_OTHER_CARD_BACKGROUND_COLOR, obj.optString("otherCardBackgroundColor", DEFAULT_OTHER_CARD_BACKGROUND_COLOR))
                 .putString(KEY_WIDGET_BACKGROUND_COLOR, obj.optString("widgetBackgroundColor", DEFAULT_WIDGET_BACKGROUND_COLOR))
-                .putString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, obj.optString("summaryBackgroundImageUri").ifBlank { null })
-                .putString(KEY_WIDGET_BACKGROUND_IMAGE_URI, obj.optString("widgetBackgroundImageUri").ifBlank { null })
+                .putString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, summaryImageUri)
+                .putString(KEY_CARD_BACKGROUND_IMAGES, cardBackgrounds.toString())
+                .putString(KEY_WIDGET_BACKGROUND_IMAGE_URI, widgetImageUri)
                 .putBoolean(KEY_USE_SEARCH_ICON, obj.optBoolean("useSearchIcon", true))
                 .putBoolean(KEY_SHOW_LEGACY_SEARCH_BAR, obj.optBoolean("showLegacySearchBar", false))
                 .putBoolean(KEY_SHOW_CARD_BALANCES, obj.optBoolean("showCardBalances", true))
@@ -563,6 +654,8 @@ class TopScreenViewModel(
                 .putBoolean(KEY_SHOW_STATISTICS_BUTTON, obj.optBoolean("showStatisticsButton", true))
                 .putBoolean(KEY_SHOW_PALETTE_ICON, obj.optBoolean("showPaletteIcon", true))
                 .putBoolean(KEY_SHOW_MORE_MENU, obj.optBoolean("showMoreMenu", true))
+                .putBoolean(KEY_SHOW_INTERNAL_CODES, obj.optBoolean("showInternalCodes", false))
+                .putBoolean(KEY_SHOW_HISTORY_HEADER, obj.optBoolean("showHistoryHeader", true))
                 .putString(KEY_FEATURE_FLAGS, obj.optJSONObject("features")?.toString() ?: "{}")
                 .apply()
             _themeMode.value = AppThemeMode.fromName(preferences.getString(KEY_THEME_MODE, null))
@@ -575,8 +668,12 @@ class TopScreenViewModel(
             _balanceBackgroundColorHex.value = preferences.getString(KEY_BALANCE_BACKGROUND_COLOR, DEFAULT_BALANCE_BACKGROUND_COLOR) ?: DEFAULT_BALANCE_BACKGROUND_COLOR
             _otherCardBackgroundColorHex.value = preferences.getString(KEY_OTHER_CARD_BACKGROUND_COLOR, DEFAULT_OTHER_CARD_BACKGROUND_COLOR) ?: DEFAULT_OTHER_CARD_BACKGROUND_COLOR
             _widgetBackgroundColorHex.value = preferences.getString(KEY_WIDGET_BACKGROUND_COLOR, DEFAULT_WIDGET_BACKGROUND_COLOR) ?: DEFAULT_WIDGET_BACKGROUND_COLOR
-            _summaryBackgroundImageUri.value = preferences.getString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, null)
-            _widgetBackgroundImageUri.value = preferences.getString(KEY_WIDGET_BACKGROUND_IMAGE_URI, null)
+            _summaryBackgroundImageUri.value = cardBackgroundUriFor(_selectedCardId.value)
+            _widgetBackgroundImageUri.value = trustedPersistedImageUriOrNull(
+                preferences.getString(KEY_WIDGET_BACKGROUND_IMAGE_URI, null)
+            )
+            _showInternalCodes.value = preferences.getBoolean(KEY_SHOW_INTERNAL_CODES, false)
+            _showHistoryHeader.value = preferences.getBoolean(KEY_SHOW_HISTORY_HEADER, true)
             _useSearchIcon.value = preferences.getBoolean(KEY_USE_SEARCH_ICON, true)
             _showLegacySearchBar.value = preferences.getBoolean(KEY_SHOW_LEGACY_SEARCH_BAR, false)
             _showCardBalances.value = preferences.getBoolean(KEY_SHOW_CARD_BALANCES, true)
@@ -588,12 +685,17 @@ class TopScreenViewModel(
             _showPaletteIcon.value = preferences.getBoolean(KEY_SHOW_PALETTE_ICON, true)
             _showMoreMenu.value = preferences.getBoolean(KEY_SHOW_MORE_MENU, true)
             _featureFlags.value = loadFeatureFlags()
-            refreshDerivedState(loadHistory(), _selectedCardId.value)
+            _defaultBackgroundImageUri.value = trustedPersistedImageUriOrNull(
+                preferences.getString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, null)
+            )
+            _cardBackgroundImageUris.value = loadCardBackgroundImageUris()
+            refreshDerivedState(activeHistory(), _selectedCardId.value)
             BalanceWidgetProvider.requestUpdate(appContext)
         }.isSuccess
     }
 
     fun clearSelectedCardHistory() {
+        if (_demoMode.value == true) return
         val selectedCardId = _selectedCardId.value ?: return
         val remainingHistory = loadHistory().filterNot { it.resolvedCardId() == selectedCardId }
         saveHistory(remainingHistory)
@@ -606,6 +708,7 @@ class TopScreenViewModel(
     }
 
     fun clearAllHistory() {
+        if (_demoMode.value == true) return
         preferences.edit()
             .remove(KEY_HISTORY)
             .remove(KEY_SELECTED_CARD_ID)
@@ -696,8 +799,8 @@ class TopScreenViewModel(
         val cards = mutableListOf<Card>()
         for (i in 0 until size) {
             val offset = HISTORY_RESPONSE_HEADER_SIZE + i * HISTORY_BLOCK_SIZE
-            val felica = SuicaReader.parse(data, offset)
-            if (felica.year == 0 || felica.month !in 1..12 || felica.day !in 1..31) continue
+            val felica = runCatching { SuicaReader.parse(data, offset) }.getOrNull() ?: continue
+            if (!felica.hasPlausibleHistoryValues()) continue
             val card: Card = Card.getCard(context, felica)
             card.cardId = cardId
             cards.add(card)
@@ -707,6 +810,8 @@ class TopScreenViewModel(
 
     private fun isValidHistoryResponse(response: ByteArray, requestedBlocks: Int): Boolean {
         if (response.size < HISTORY_RESPONSE_HEADER_SIZE) return false
+        if ((response[0].toInt() and 0xff) != response.size || (response[1].toInt() and 0xff) != 0x07) return false
+        if (response[10].toInt() != 0 || response[11].toInt() != 0) return false
         val blockCount = response[12].toInt() and 0xff
         if (blockCount > requestedBlocks || blockCount > MAX_HISTORY_RECORDS_PER_RESPONSE) return false
         return response.size >= HISTORY_RESPONSE_HEADER_SIZE + blockCount * HISTORY_BLOCK_SIZE
@@ -797,6 +902,7 @@ class TopScreenViewModel(
         _cardSummaries.value = summaries
         _selectedCardId.value = selectedCardId
         _selectedHistory.value = filterHistory(allCards, selectedCardId, _searchQuery.value.orEmpty())
+        _summaryBackgroundImageUri.value = cardBackgroundUriFor(selectedCardId)
         setSelectedCard(selectedCardId)
     }
 
@@ -846,6 +952,9 @@ class TopScreenViewModel(
             }
         }.getOrDefault(emptyList())
     }
+
+    private fun activeHistory(): List<Card> =
+        if (_demoMode.value == true) demoHistory() else loadHistory()
 
     private fun saveHistory(cards: List<Card>) {
         val array = JSONArray()
@@ -911,6 +1020,7 @@ class TopScreenViewModel(
             putNullable("outCompany", outCompany)
             putNullable("memo", memo)
             putNullable("tags", tags)
+            putNullable("internalCode", internalCode)
             put("manuallyEdited", manuallyEdited)
         }
     }
@@ -934,6 +1044,7 @@ class TopScreenViewModel(
             outCompany = nullableString("outCompany"),
             memo = nullableString("memo"),
             tags = nullableString("tags"),
+            internalCode = nullableString("internalCode"),
             manuallyEdited = optBoolean("manuallyEdited", false)
         )
     }
@@ -947,6 +1058,132 @@ class TopScreenViewModel(
     }
 
     private fun Card.resolvedCardId(): String = cardId ?: LEGACY_CARD_ID
+
+    private fun loadCardBackgroundImages(): JSONObject = sanitizeCardBackgroundImages(
+        runCatching { JSONObject(preferences.getString(KEY_CARD_BACKGROUND_IMAGES, "{}") ?: "{}") }.getOrNull()
+    )
+
+    private fun loadCardBackgroundImageUris(): Map<String, String> {
+        val images = loadCardBackgroundImages()
+        return images.keys().asSequence().mapNotNull { cardId ->
+            trustedPersistedImageUriOrNull(images.optString(cardId))?.let { cardId to it }
+        }.toMap()
+    }
+
+    private fun cardBackgroundUriFor(cardId: String?): String? {
+        if (cardId == null) return null
+        val saved = loadCardBackgroundImages().optString(cardId)
+        return when {
+            saved == NO_BACKGROUND_IMAGE -> null
+            saved.isNotBlank() -> trustedPersistedImageUriOrNull(saved)
+            else -> trustedPersistedImageUriOrNull(
+                preferences.getString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, null)
+            )
+        }
+    }
+
+    private fun migrateBackgroundImageFallback() {
+        if (trustedPersistedImageUriOrNull(
+                preferences.getString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, null)
+            ) != null
+        ) return
+        val fallback = loadCardBackgroundImages().keys().asSequence()
+            .mapNotNull { cardId -> trustedPersistedImageUriOrNull(loadCardBackgroundImages().optString(cardId)) }
+            .firstOrNull()
+            ?: return
+        preferences.edit().putString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, fallback).apply()
+        _defaultBackgroundImageUri.value = fallback
+    }
+
+    private fun sanitizeCardBackgroundImages(source: JSONObject?): JSONObject {
+        val sanitized = JSONObject()
+        source?.keys()?.forEach { cardId ->
+            if (!CARD_ID_PATTERN.matches(cardId)) return@forEach
+            val uri = source.optString(cardId)
+            when {
+                uri == NO_BACKGROUND_IMAGE -> sanitized.put(cardId, uri)
+                trustedPersistedImageUriOrNull(uri) != null -> sanitized.put(cardId, uri)
+            }
+        }
+        return sanitized
+    }
+
+    private fun trustedPersistedImageUriOrNull(rawUri: String?): String? {
+        if (rawUri.isNullOrBlank()) return null
+        return rawUri.takeIf(::isTrustedPersistedImageUri)
+    }
+
+    private fun isTrustedPersistedImageUri(rawUri: String): Boolean = runCatching {
+        val uri = Uri.parse(rawUri)
+        require(uri.scheme == "content" && !uri.authority.isNullOrBlank())
+        appContext.contentResolver.persistedUriPermissions.any { permission ->
+            permission.isReadPermission && permission.uri == uri
+        }
+    }.getOrDefault(false)
+
+    private fun demoHistory(): List<Card> = listOf(
+        Card(
+            cardId = "01010112951DDA13",
+            date = "2026/08/09",
+            number = "9003",
+            amount = "-240",
+            kind = "JR",
+            device = "改札機",
+            action = "運賃支払",
+            inCompany = "JR西日本",
+            inLine = "大阪環状線",
+            inStation = "大阪",
+            outCompany = "JR西日本",
+            outLine = "大阪環状線",
+            outStation = "天王寺",
+            balance = "2,760"
+        ),
+        Card(
+            cardId = "01010112951DDA13",
+            date = "2026/08/08",
+            number = "9002",
+            amount = "1000",
+            kind = "チャージ",
+            device = "券売機",
+            action = "チャージ",
+            inCompany = "JR西日本",
+            inLine = "大阪環状線",
+            inStation = "大阪",
+            balance = "3,000"
+        ),
+        Card(
+            cardId = "02020222AABBCCDD",
+            date = "2026/08/07",
+            number = "8101",
+            amount = "-190",
+            kind = "公営/私鉄",
+            device = "改札機",
+            action = "運賃支払",
+            inCompany = "Osaka Metro",
+            inLine = "谷町線",
+            inStation = "野江内代",
+            outCompany = "Osaka Metro",
+            outLine = "谷町線",
+            outStation = "東梅田",
+            balance = "1,320"
+        ),
+        Card(
+            cardId = "03030333EEFF1020",
+            date = "2026/08/06",
+            number = "7201",
+            amount = "-178",
+            kind = "JR",
+            device = "改札機",
+            action = "運賃支払",
+            inCompany = "JR東日本",
+            inLine = "中央線",
+            inStation = "東京",
+            outCompany = "JR東日本",
+            outLine = "中央線",
+            outStation = "御茶ノ水",
+            balance = "4,680"
+        )
+    )
 
     private fun String.displayTitle(records: List<Card>): String {
         return if (this == LEGACY_CARD_ID) {
@@ -1009,7 +1246,6 @@ class TopScreenViewModel(
     )
 
     companion object {
-        private const val PREFS_NAME = "suica_reader_history"
         private const val KEY_HISTORY = "history"
         private const val KEY_SELECTED_CARD_ID = "selected_card_id"
         private const val KEY_THEME_MODE = "theme_mode"
@@ -1023,6 +1259,7 @@ class TopScreenViewModel(
         private const val KEY_OTHER_CARD_BACKGROUND_COLOR = "other_card_background_color"
         private const val KEY_WIDGET_BACKGROUND_COLOR = "widget_background_color"
         private const val KEY_SUMMARY_BACKGROUND_IMAGE_URI = "summary_background_image_uri"
+        private const val KEY_CARD_BACKGROUND_IMAGES = "card_background_images"
         private const val KEY_WIDGET_BACKGROUND_IMAGE_URI = "widget_background_image_uri"
         private const val KEY_APP_TITLE = "app_title"
         private const val KEY_USE_SEARCH_ICON = "use_search_icon"
@@ -1035,6 +1272,9 @@ class TopScreenViewModel(
         private const val KEY_SHOW_STATISTICS_BUTTON = "show_statistics_button"
         private const val KEY_SHOW_PALETTE_ICON = "show_palette_icon"
         private const val KEY_SHOW_MORE_MENU = "show_more_menu"
+        private const val KEY_SHOW_INTERNAL_CODES = "show_internal_codes"
+        private const val KEY_SHOW_HISTORY_HEADER = "show_history_header"
+        private const val KEY_DEMO_MODE = "demo_mode"
         private const val KEY_FEATURE_FLAGS = "feature_flags"
         private const val DEFAULT_ACCENT_COLOR = "#8AD7C8"
         private const val DEFAULT_BALANCE_COLOR = "#8AD7C8"
@@ -1046,6 +1286,8 @@ class TopScreenViewModel(
         private const val DEFAULT_WIDGET_BACKGROUND_COLOR = "#000000"
         private const val DEFAULT_APP_TITLE = "SuicaNFC KD"
         private const val LEGACY_CARD_ID = "legacy"
+        private const val NO_BACKGROUND_IMAGE = "__none__"
+        private val CARD_ID_PATTERN = Regex("(?:[0-9A-Fa-f]{8,64}|legacy)")
         private const val READ_BLOCK_CHUNK_SIZE = 10
         private const val MAX_READ_BLOCKS = 50
         private const val MAX_HISTORY_ITEMS = 300
