@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">SuicaNFC KD</string>
+    <string name="top_screen">Top Screen</string>
+    <string name="widget_description">複数カードの残高と統計を表示します</string>
+</resources>
