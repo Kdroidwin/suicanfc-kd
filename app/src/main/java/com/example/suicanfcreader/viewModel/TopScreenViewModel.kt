@@ -79,6 +79,27 @@ class TopScreenViewModel(
         MutableLiveData(AppThemeMode.fromName(preferences.getString(KEY_THEME_MODE, null)))
     val themeMode: LiveData<AppThemeMode> = _themeMode
 
+    private val _themeBackgroundImageUri = MutableLiveData(
+        trustedPersistedImageUriOrNull(preferences.getString(KEY_THEME_BACKGROUND_IMAGE_URI, null))
+    )
+    val themeBackgroundImageUri: LiveData<String?> = _themeBackgroundImageUri
+
+    private val _themeBackgroundDimAmount = MutableLiveData(
+        preferences.getInt(KEY_THEME_BACKGROUND_DIM_AMOUNT, DEFAULT_THEME_BACKGROUND_DIM_AMOUNT).coerceIn(0, 100)
+    )
+    val themeBackgroundDimAmount: LiveData<Int> = _themeBackgroundDimAmount
+
+    private val _widgetPrivacyMode =
+        MutableLiveData(preferences.getBoolean(KEY_WIDGET_PRIVACY_MODE, true))
+    val widgetPrivacyMode: LiveData<Boolean> = _widgetPrivacyMode
+
+    private val _useTransparentContentSurfaces =
+        MutableLiveData(preferences.getBoolean(KEY_TRANSPARENT_CONTENT_SURFACES, false))
+    val useTransparentContentSurfaces: LiveData<Boolean> = _useTransparentContentSurfaces
+
+    private val _bottomTabIconUris = MutableLiveData(loadBottomTabIconUris())
+    val bottomTabIconUris: LiveData<Map<String, String?>> = _bottomTabIconUris
+
     private val _accentColorHex =
         MutableLiveData(preferences.getString(KEY_ACCENT_COLOR, DEFAULT_ACCENT_COLOR) ?: DEFAULT_ACCENT_COLOR)
     val accentColorHex: LiveData<String> = _accentColorHex
@@ -124,7 +145,9 @@ class TopScreenViewModel(
     val cardBackgroundImageUris: LiveData<Map<String, String>> = _cardBackgroundImageUris
 
     private val _widgetBackgroundImageUri =
-        MutableLiveData(preferences.getString(KEY_WIDGET_BACKGROUND_IMAGE_URI, null))
+        MutableLiveData(trustedPersistedImageUriOrNull(
+            preferences.getString(KEY_WIDGET_BACKGROUND_IMAGE_URI, null)
+        ))
     val widgetBackgroundImageUri: LiveData<String?> = _widgetBackgroundImageUri
 
     private val _appTitle =
@@ -183,6 +206,18 @@ class TopScreenViewModel(
     private val _showHistoryHeader =
         MutableLiveData(preferences.getBoolean(KEY_SHOW_HISTORY_HEADER, true))
     val showHistoryHeader: LiveData<Boolean> = _showHistoryHeader
+
+    private val _showBalanceDate =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_BALANCE_DATE, true))
+    val showBalanceDate: LiveData<Boolean> = _showBalanceDate
+
+    private val _showHistoryBalances =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_HISTORY_BALANCES, true))
+    val showHistoryBalances: LiveData<Boolean> = _showHistoryBalances
+
+    private val _showHistoryIcons =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_HISTORY_ICONS, true))
+    val showHistoryIcons: LiveData<Boolean> = _showHistoryIcons
 
     private val _demoMode = MutableLiveData(initialDemoMode)
     val demoMode: LiveData<Boolean> = _demoMode
@@ -276,8 +311,38 @@ class TopScreenViewModel(
         _themeMode.value = mode
     }
 
+    fun setThemeBackgroundImageUri(uri: String?) {
+        if (uri != null && !isTrustedPersistedImageUri(uri)) return
+        preferences.edit().putString(KEY_THEME_BACKGROUND_IMAGE_URI, uri).apply()
+        _themeBackgroundImageUri.value = uri
+    }
+
+    fun setThemeBackgroundDimAmount(amount: Int) {
+        val normalized = amount.coerceIn(0, 100)
+        preferences.edit().putInt(KEY_THEME_BACKGROUND_DIM_AMOUNT, normalized).apply()
+        _themeBackgroundDimAmount.value = normalized
+    }
+
+    fun setWidgetPrivacyMode(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_WIDGET_PRIVACY_MODE, enabled).apply()
+        _widgetPrivacyMode.value = enabled
+        BalanceWidgetProvider.requestUpdate(appContext)
+    }
+
+    fun setUseTransparentContentSurfaces(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_TRANSPARENT_CONTENT_SURFACES, enabled).apply()
+        _useTransparentContentSurfaces.value = enabled
+    }
+
+    fun setBottomTabIconUri(kind: String, uri: String?) {
+        val key = bottomTabIconPreferenceKey(kind) ?: return
+        if (uri != null && !isTrustedPersistedImageUri(uri)) return
+        preferences.edit().putString(key, uri).apply()
+        _bottomTabIconUris.value = loadBottomTabIconUris()
+    }
+
     fun setAppTitle(title: String) {
-        val normalized = title.trim().ifBlank { DEFAULT_APP_TITLE }
+        val normalized = sanitizeAppTitle(title)
         preferences.edit().putString(KEY_APP_TITLE, normalized).apply()
         _appTitle.value = normalized
     }
@@ -446,6 +511,21 @@ class TopScreenViewModel(
         _showHistoryHeader.value = show
     }
 
+    fun setShowBalanceDate(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_BALANCE_DATE, show).apply()
+        _showBalanceDate.value = show
+    }
+
+    fun setShowHistoryBalances(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_HISTORY_BALANCES, show).apply()
+        _showHistoryBalances.value = show
+    }
+
+    fun setShowHistoryIcons(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_HISTORY_ICONS, show).apply()
+        _showHistoryIcons.value = show
+    }
+
     fun showStatsDialog() {
         _statsDialogVisible.value = true
     }
@@ -580,10 +660,18 @@ class TopScreenViewModel(
 
     fun exportBackupJson(): String {
         return JSONObject().apply {
-            put("schema", 1)
+            put("schema", BACKUP_SCHEMA_VERSION)
             put("history", JSONArray(preferences.getString(KEY_HISTORY, "[]") ?: "[]"))
-            put("cardAliases", JSONObject(preferences.getString(KEY_CARD_ALIASES, "{}") ?: "{}"))
+            put("selectedCardId", _selectedCardId.value)
+            put("cardAliases", sanitizeAliases(JSONObject(preferences.getString(KEY_CARD_ALIASES, "{}") ?: "{}")))
             put("themeMode", _themeMode.value?.name ?: AppThemeMode.AMOLED.name)
+            put("themeBackgroundImageUri", trustedPersistedImageUriOrNull(_themeBackgroundImageUri.value))
+            put("themeBackgroundDimAmount", _themeBackgroundDimAmount.value ?: DEFAULT_THEME_BACKGROUND_DIM_AMOUNT)
+            put("widgetPrivacyMode", _widgetPrivacyMode.value ?: true)
+            put("transparentContentSurfaces", _useTransparentContentSurfaces.value ?: false)
+            put("bottomTabCardIconUri", trustedPersistedImageUriOrNull(_bottomTabIconUris.value?.get("card")))
+            put("bottomTabStatsIconUri", trustedPersistedImageUriOrNull(_bottomTabIconUris.value?.get("stats")))
+            put("bottomTabSettingsIconUri", trustedPersistedImageUriOrNull(_bottomTabIconUris.value?.get("settings")))
             put("appTitle", _appTitle.value ?: DEFAULT_APP_TITLE)
             put("accentColor", _accentColorHex.value ?: DEFAULT_ACCENT_COLOR)
             put("balanceColor", _balanceColorHex.value ?: DEFAULT_BALANCE_COLOR)
@@ -611,7 +699,11 @@ class TopScreenViewModel(
             put("showMoreMenu", _showMoreMenu.value ?: true)
             put("showInternalCodes", _showInternalCodes.value ?: false)
             put("showHistoryHeader", _showHistoryHeader.value ?: true)
-            put("features", JSONObject(preferences.getString(KEY_FEATURE_FLAGS, "{}") ?: "{}"))
+            put("showBalanceDate", _showBalanceDate.value ?: true)
+            put("showHistoryBalances", _showHistoryBalances.value ?: true)
+            put("showHistoryIcons", _showHistoryIcons.value ?: true)
+            put("demoMode", _demoMode.value ?: false)
+            put("features", sanitizeFeatureFlags(JSONObject(preferences.getString(KEY_FEATURE_FLAGS, "{}") ?: "{}")))
         }.toString(2)
     }
 
@@ -619,28 +711,46 @@ class TopScreenViewModel(
         return runCatching {
             require(rawJson.length <= MAX_BACKUP_JSON_LENGTH) { "Backup is too large" }
             val obj = JSONObject(rawJson)
+            require(obj.optInt("schema", 1) in 1..BACKUP_SCHEMA_VERSION) { "Unsupported backup schema" }
             val history = obj.optJSONArray("history") ?: JSONArray()
             require(history.length() <= MAX_HISTORY_ITEMS) { "Too many history records" }
+            val selectedCardId = obj.optString("selectedCardId").takeIf { CARD_ID_PATTERN.matches(it) }
+            val aliases = sanitizeAliases(obj.optJSONObject("cardAliases"))
             val summaryImageUri = trustedPersistedImageUriOrNull(
                 obj.optString("summaryBackgroundImageUri").ifBlank { null }
             )
             val widgetImageUri = trustedPersistedImageUriOrNull(
                 obj.optString("widgetBackgroundImageUri").ifBlank { null }
             )
+            val themeImageUri = trustedPersistedImageUriOrNull(
+                obj.optString("themeBackgroundImageUri").ifBlank { null }
+            )
+            val cardTabIconUri = trustedPersistedImageUriOrNull(obj.optString("bottomTabCardIconUri").ifBlank { null })
+            val statsTabIconUri = trustedPersistedImageUriOrNull(obj.optString("bottomTabStatsIconUri").ifBlank { null })
+            val settingsTabIconUri = trustedPersistedImageUriOrNull(obj.optString("bottomTabSettingsIconUri").ifBlank { null })
             val cardBackgrounds = sanitizeCardBackgroundImages(obj.optJSONObject("cardBackgroundImages"))
+            val featureFlags = sanitizeFeatureFlags(obj.optJSONObject("features"))
             preferences.edit()
                 .putString(KEY_HISTORY, history.toString())
-                .putString(KEY_CARD_ALIASES, obj.optJSONObject("cardAliases")?.toString() ?: "{}")
-                .putString(KEY_THEME_MODE, obj.optString("themeMode", AppThemeMode.AMOLED.name))
-                .putString(KEY_APP_TITLE, obj.optString("appTitle", DEFAULT_APP_TITLE))
-                .putString(KEY_ACCENT_COLOR, obj.optString("accentColor", DEFAULT_ACCENT_COLOR))
-                .putString(KEY_BALANCE_COLOR, obj.optString("balanceColor", DEFAULT_BALANCE_COLOR))
-                .putString(KEY_SUMMARY_BACKGROUND_COLOR, obj.optString("summaryBackgroundColor", DEFAULT_SUMMARY_BACKGROUND_COLOR))
-                .putString(KEY_NOTICE_BACKGROUND_COLOR, obj.optString("noticeBackgroundColor", DEFAULT_NOTICE_BACKGROUND_COLOR))
-                .putString(KEY_DELETE_BUTTON_COLOR, obj.optString("deleteButtonColor", DEFAULT_DELETE_BUTTON_COLOR))
-                .putString(KEY_BALANCE_BACKGROUND_COLOR, obj.optString("balanceBackgroundColor", DEFAULT_BALANCE_BACKGROUND_COLOR))
-                .putString(KEY_OTHER_CARD_BACKGROUND_COLOR, obj.optString("otherCardBackgroundColor", DEFAULT_OTHER_CARD_BACKGROUND_COLOR))
-                .putString(KEY_WIDGET_BACKGROUND_COLOR, obj.optString("widgetBackgroundColor", DEFAULT_WIDGET_BACKGROUND_COLOR))
+                .putString(KEY_SELECTED_CARD_ID, selectedCardId)
+                .putString(KEY_CARD_ALIASES, aliases.toString())
+                .putString(KEY_THEME_MODE, AppThemeMode.fromName(obj.optString("themeMode", AppThemeMode.AMOLED.name)).name)
+                .putString(KEY_THEME_BACKGROUND_IMAGE_URI, themeImageUri)
+                .putInt(KEY_THEME_BACKGROUND_DIM_AMOUNT, obj.optInt("themeBackgroundDimAmount", DEFAULT_THEME_BACKGROUND_DIM_AMOUNT).coerceIn(0, 100))
+                .putBoolean(KEY_WIDGET_PRIVACY_MODE, obj.optBoolean("widgetPrivacyMode", true))
+                .putBoolean(KEY_TRANSPARENT_CONTENT_SURFACES, obj.optBoolean("transparentContentSurfaces", false))
+                .putString(KEY_BOTTOM_TAB_CARD_ICON_URI, cardTabIconUri)
+                .putString(KEY_BOTTOM_TAB_STATS_ICON_URI, statsTabIconUri)
+                .putString(KEY_BOTTOM_TAB_SETTINGS_ICON_URI, settingsTabIconUri)
+                .putString(KEY_APP_TITLE, sanitizeAppTitle(obj.optString("appTitle", DEFAULT_APP_TITLE)))
+                .putString(KEY_ACCENT_COLOR, sanitizeColor(obj.optString("accentColor"), DEFAULT_ACCENT_COLOR))
+                .putString(KEY_BALANCE_COLOR, sanitizeColor(obj.optString("balanceColor"), DEFAULT_BALANCE_COLOR))
+                .putString(KEY_SUMMARY_BACKGROUND_COLOR, sanitizeColor(obj.optString("summaryBackgroundColor"), DEFAULT_SUMMARY_BACKGROUND_COLOR))
+                .putString(KEY_NOTICE_BACKGROUND_COLOR, sanitizeColor(obj.optString("noticeBackgroundColor"), DEFAULT_NOTICE_BACKGROUND_COLOR))
+                .putString(KEY_DELETE_BUTTON_COLOR, sanitizeColor(obj.optString("deleteButtonColor"), DEFAULT_DELETE_BUTTON_COLOR))
+                .putString(KEY_BALANCE_BACKGROUND_COLOR, sanitizeColor(obj.optString("balanceBackgroundColor"), DEFAULT_BALANCE_BACKGROUND_COLOR))
+                .putString(KEY_OTHER_CARD_BACKGROUND_COLOR, sanitizeColor(obj.optString("otherCardBackgroundColor"), DEFAULT_OTHER_CARD_BACKGROUND_COLOR))
+                .putString(KEY_WIDGET_BACKGROUND_COLOR, sanitizeColor(obj.optString("widgetBackgroundColor"), DEFAULT_WIDGET_BACKGROUND_COLOR))
                 .putString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, summaryImageUri)
                 .putString(KEY_CARD_BACKGROUND_IMAGES, cardBackgrounds.toString())
                 .putString(KEY_WIDGET_BACKGROUND_IMAGE_URI, widgetImageUri)
@@ -656,9 +766,18 @@ class TopScreenViewModel(
                 .putBoolean(KEY_SHOW_MORE_MENU, obj.optBoolean("showMoreMenu", true))
                 .putBoolean(KEY_SHOW_INTERNAL_CODES, obj.optBoolean("showInternalCodes", false))
                 .putBoolean(KEY_SHOW_HISTORY_HEADER, obj.optBoolean("showHistoryHeader", true))
-                .putString(KEY_FEATURE_FLAGS, obj.optJSONObject("features")?.toString() ?: "{}")
+                .putBoolean(KEY_SHOW_BALANCE_DATE, obj.optBoolean("showBalanceDate", true))
+                .putBoolean(KEY_SHOW_HISTORY_BALANCES, obj.optBoolean("showHistoryBalances", true))
+                .putBoolean(KEY_SHOW_HISTORY_ICONS, obj.optBoolean("showHistoryIcons", true))
+                .putBoolean(KEY_DEMO_MODE, obj.optBoolean("demoMode", false))
+                .putString(KEY_FEATURE_FLAGS, featureFlags.toString())
                 .apply()
             _themeMode.value = AppThemeMode.fromName(preferences.getString(KEY_THEME_MODE, null))
+            _themeBackgroundImageUri.value = trustedPersistedImageUriOrNull(preferences.getString(KEY_THEME_BACKGROUND_IMAGE_URI, null))
+            _themeBackgroundDimAmount.value = preferences.getInt(KEY_THEME_BACKGROUND_DIM_AMOUNT, DEFAULT_THEME_BACKGROUND_DIM_AMOUNT).coerceIn(0, 100)
+            _widgetPrivacyMode.value = preferences.getBoolean(KEY_WIDGET_PRIVACY_MODE, true)
+            _useTransparentContentSurfaces.value = preferences.getBoolean(KEY_TRANSPARENT_CONTENT_SURFACES, false)
+            _bottomTabIconUris.value = loadBottomTabIconUris()
             _appTitle.value = preferences.getString(KEY_APP_TITLE, DEFAULT_APP_TITLE) ?: DEFAULT_APP_TITLE
             _accentColorHex.value = preferences.getString(KEY_ACCENT_COLOR, DEFAULT_ACCENT_COLOR) ?: DEFAULT_ACCENT_COLOR
             _balanceColorHex.value = preferences.getString(KEY_BALANCE_COLOR, DEFAULT_BALANCE_COLOR) ?: DEFAULT_BALANCE_COLOR
@@ -674,6 +793,10 @@ class TopScreenViewModel(
             )
             _showInternalCodes.value = preferences.getBoolean(KEY_SHOW_INTERNAL_CODES, false)
             _showHistoryHeader.value = preferences.getBoolean(KEY_SHOW_HISTORY_HEADER, true)
+            _showBalanceDate.value = preferences.getBoolean(KEY_SHOW_BALANCE_DATE, true)
+            _showHistoryBalances.value = preferences.getBoolean(KEY_SHOW_HISTORY_BALANCES, true)
+            _showHistoryIcons.value = preferences.getBoolean(KEY_SHOW_HISTORY_ICONS, true)
+            _demoMode.value = preferences.getBoolean(KEY_DEMO_MODE, false)
             _useSearchIcon.value = preferences.getBoolean(KEY_USE_SEARCH_ICON, true)
             _showLegacySearchBar.value = preferences.getBoolean(KEY_SHOW_LEGACY_SEARCH_BAR, false)
             _showCardBalances.value = preferences.getBoolean(KEY_SHOW_CARD_BALANCES, true)
@@ -978,14 +1101,13 @@ class TopScreenViewModel(
     }
 
     private fun saveColor(key: String, hex: String, onSaved: (String) -> Unit) {
-        val normalized = hex.trim().let { if (it.startsWith("#")) it else "#$it" }
-        if (!Regex("^#[0-9a-fA-F]{6}$").matches(normalized)) return
+        val normalized = sanitizeColor(hex, "")
+        if (normalized.isEmpty()) return
         preferences.edit().putString(key, normalized).apply()
         onSaved(normalized)
     }
 
-    private fun loadFeatureFlags(): Map<String, Boolean> {
-        val defaults = linkedMapOf(
+    private fun defaultFeatureFlags(): Map<String, Boolean> = linkedMapOf(
             "manual_edit" to true,
             "memo_tags" to true,
             "search_filter" to true,
@@ -994,11 +1116,36 @@ class TopScreenViewModel(
             "widget" to true,
             "card_alias" to true
         )
+
+    private fun loadFeatureFlags(): Map<String, Boolean> {
+        val defaults = defaultFeatureFlags()
         val rawJson = preferences.getString(KEY_FEATURE_FLAGS, null) ?: return defaults
         return runCatching {
             val obj = JSONObject(rawJson)
             defaults.mapValues { (key, defaultValue) -> obj.optBoolean(key, defaultValue) }
         }.getOrDefault(defaults)
+    }
+
+    private fun sanitizeFeatureFlags(source: JSONObject?): JSONObject = JSONObject().apply {
+        defaultFeatureFlags().forEach { (key, defaultValue) ->
+            put(key, source?.optBoolean(key, defaultValue) ?: defaultValue)
+        }
+    }
+
+    private fun sanitizeAliases(source: JSONObject?): JSONObject = JSONObject().apply {
+        source?.keys()?.forEach { cardId ->
+            if (!CARD_ID_PATTERN.matches(cardId)) return@forEach
+            val alias = source.optString(cardId).trim().take(MAX_ALIAS_LENGTH)
+            if (alias.isNotBlank()) put(cardId, alias)
+        }
+    }
+
+    private fun sanitizeAppTitle(rawTitle: String?): String =
+        rawTitle.orEmpty().trim().take(MAX_APP_TITLE_LENGTH).ifBlank { DEFAULT_APP_TITLE }
+
+    private fun sanitizeColor(rawColor: String?, fallback: String): String {
+        val normalized = rawColor.orEmpty().trim().let { if (it.startsWith("#")) it else "#$it" }
+        return normalized.takeIf(COLOR_PATTERN::matches) ?: fallback
     }
 
     private fun Card.toJson(): JSONObject {
@@ -1111,6 +1258,19 @@ class TopScreenViewModel(
     private fun trustedPersistedImageUriOrNull(rawUri: String?): String? {
         if (rawUri.isNullOrBlank()) return null
         return rawUri.takeIf(::isTrustedPersistedImageUri)
+    }
+
+    private fun loadBottomTabIconUris(): Map<String, String?> = mapOf(
+        "card" to trustedPersistedImageUriOrNull(preferences.getString(KEY_BOTTOM_TAB_CARD_ICON_URI, null)),
+        "stats" to trustedPersistedImageUriOrNull(preferences.getString(KEY_BOTTOM_TAB_STATS_ICON_URI, null)),
+        "settings" to trustedPersistedImageUriOrNull(preferences.getString(KEY_BOTTOM_TAB_SETTINGS_ICON_URI, null))
+    )
+
+    private fun bottomTabIconPreferenceKey(kind: String): String? = when (kind) {
+        "card" -> KEY_BOTTOM_TAB_CARD_ICON_URI
+        "stats" -> KEY_BOTTOM_TAB_STATS_ICON_URI
+        "settings" -> KEY_BOTTOM_TAB_SETTINGS_ICON_URI
+        else -> null
     }
 
     private fun isTrustedPersistedImageUri(rawUri: String): Boolean = runCatching {
@@ -1249,6 +1409,13 @@ class TopScreenViewModel(
         private const val KEY_HISTORY = "history"
         private const val KEY_SELECTED_CARD_ID = "selected_card_id"
         private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_THEME_BACKGROUND_IMAGE_URI = "theme_background_image_uri"
+        private const val KEY_THEME_BACKGROUND_DIM_AMOUNT = "theme_background_dim_amount"
+        private const val KEY_WIDGET_PRIVACY_MODE = "widget_privacy_mode"
+        private const val KEY_TRANSPARENT_CONTENT_SURFACES = "transparent_content_surfaces"
+        private const val KEY_BOTTOM_TAB_CARD_ICON_URI = "bottom_tab_card_icon_uri"
+        private const val KEY_BOTTOM_TAB_STATS_ICON_URI = "bottom_tab_stats_icon_uri"
+        private const val KEY_BOTTOM_TAB_SETTINGS_ICON_URI = "bottom_tab_settings_icon_uri"
         private const val KEY_CARD_ALIASES = "card_aliases"
         private const val KEY_ACCENT_COLOR = "accent_color"
         private const val KEY_BALANCE_COLOR = "balance_color"
@@ -1274,6 +1441,9 @@ class TopScreenViewModel(
         private const val KEY_SHOW_MORE_MENU = "show_more_menu"
         private const val KEY_SHOW_INTERNAL_CODES = "show_internal_codes"
         private const val KEY_SHOW_HISTORY_HEADER = "show_history_header"
+        private const val KEY_SHOW_BALANCE_DATE = "show_balance_date"
+        private const val KEY_SHOW_HISTORY_BALANCES = "show_history_balances"
+        private const val KEY_SHOW_HISTORY_ICONS = "show_history_icons"
         private const val KEY_DEMO_MODE = "demo_mode"
         private const val KEY_FEATURE_FLAGS = "feature_flags"
         private const val DEFAULT_ACCENT_COLOR = "#8AD7C8"
@@ -1285,6 +1455,10 @@ class TopScreenViewModel(
         private const val DEFAULT_OTHER_CARD_BACKGROUND_COLOR = "#101C24"
         private const val DEFAULT_WIDGET_BACKGROUND_COLOR = "#000000"
         private const val DEFAULT_APP_TITLE = "SuicaNFC KD"
+        private const val DEFAULT_THEME_BACKGROUND_DIM_AMOUNT = 42
+        private const val BACKUP_SCHEMA_VERSION = 2
+        private const val MAX_APP_TITLE_LENGTH = 80
+        private const val MAX_ALIAS_LENGTH = 80
         private const val LEGACY_CARD_ID = "legacy"
         private const val NO_BACKGROUND_IMAGE = "__none__"
         private val CARD_ID_PATTERN = Regex("(?:[0-9A-Fa-f]{8,64}|legacy)")
@@ -1292,6 +1466,7 @@ class TopScreenViewModel(
         private const val MAX_READ_BLOCKS = 50
         private const val MAX_HISTORY_ITEMS = 300
         private const val MAX_BACKUP_JSON_LENGTH = 2 * 1024 * 1024
+        private val COLOR_PATTERN = Regex("^#[0-9a-fA-F]{6}$")
         private const val FELICA_ID_LENGTH = 8
         private const val HISTORY_RESPONSE_HEADER_SIZE = 13
         private const val HISTORY_BLOCK_SIZE = 16

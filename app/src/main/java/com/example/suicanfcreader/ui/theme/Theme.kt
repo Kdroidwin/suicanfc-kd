@@ -66,6 +66,10 @@ fun SuicaNFCReaderTheme(
         AppThemeMode.AMOLED -> AmoledColorScheme.copy(primary = accentColor)
         AppThemeMode.DARK -> DarkColorScheme.copy(primary = accentColor)
         AppThemeMode.WHITE -> WhiteColorScheme.copy(primary = accentColor)
+        AppThemeMode.CUSTOM_IMAGE -> DarkColorScheme.copy(
+            primary = accentColor,
+            background = Color.Transparent
+        )
     }
 
     MaterialTheme(

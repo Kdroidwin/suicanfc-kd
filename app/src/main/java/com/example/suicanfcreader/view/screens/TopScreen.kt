@@ -52,6 +52,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -110,6 +111,10 @@ fun TopScreen(
     val showStatisticsButton = topScreenViewModel.showStatisticsButton.observeAsState(true)
     val showInternalCodes = topScreenViewModel.showInternalCodes.observeAsState(false)
     val showHistoryHeader = topScreenViewModel.showHistoryHeader.observeAsState(true)
+    val showBalanceDate = topScreenViewModel.showBalanceDate.observeAsState(true)
+    val showHistoryBalances = topScreenViewModel.showHistoryBalances.observeAsState(true)
+    val showHistoryIcons = topScreenViewModel.showHistoryIcons.observeAsState(true)
+    val transparentContentSurfaces = topScreenViewModel.useTransparentContentSurfaces.observeAsState(false)
     val readCardIds = topScreenViewModel.readCardIds.observeAsState(emptySet())
     val clipboardManager: ClipboardManager = LocalClipboardManager.current
     val selectedSummary = summaries.value.firstOrNull { it.cardId == selectedCardId.value }
@@ -137,6 +142,8 @@ fun TopScreen(
             deleteButtonColor = deleteButtonColor,
             summaryBackgroundImage = summaryBackgroundImage,
             modern = useModernUi.value,
+            transparent = transparentContentSurfaces.value,
+            showBalanceDate = showBalanceDate.value,
             showReadNotice = showReadNotice.value,
             showDeleteButton = showDeleteButton.value,
             onCopyJson = { clipboardManager.setText(AnnotatedString(topScreenViewModel.exportSelectedJson())) },
@@ -191,6 +198,7 @@ fun TopScreen(
                             selectedCardId = selectedCardId.value,
                             balanceColor = balanceColor,
                             backgroundColor = otherCardBackgroundColor,
+                            transparent = transparentContentSurfaces.value,
                             cardBackgroundImageUris = cardBackgroundImageUris.value,
                             defaultBackgroundImageUri = defaultBackgroundImageUri.value,
                             onSelectCard = topScreenViewModel::selectCard
@@ -228,6 +236,7 @@ fun TopScreen(
                     isRead = summary.cardId in readCardIds.value,
                     balanceColor = balanceColor,
                     otherCardBackgroundColor = otherCardBackgroundColor,
+                    transparent = transparentContentSurfaces.value,
                     backgroundImageUri = cardBackgroundImageUris.value[summary.cardId] ?: defaultBackgroundImageUri.value,
                     onClick = { topScreenViewModel.selectCard(summary.cardId) }
                 )
@@ -257,7 +266,7 @@ fun TopScreen(
 
         if (selectedHistory.value.isEmpty()) {
             item {
-                EmptyHistoryCard()
+                EmptyHistoryCard(transparentContentSurfaces.value)
             }
         } else {
             groupedHistory.forEach { (date, records) ->
@@ -270,6 +279,9 @@ fun TopScreen(
                             card = card,
                             balanceColor = balanceColor,
                             showInternalCodes = showInternalCodes.value,
+                            transparent = transparentContentSurfaces.value,
+                            showBalance = showHistoryBalances.value,
+                            showIcon = showHistoryIcons.value,
                             onEdit = { editingRecord = card }
                         )
                     } else {
@@ -279,6 +291,9 @@ fun TopScreen(
                             isLatest = index == 0,
                             balanceColor = balanceColor,
                             showInternalCodes = showInternalCodes.value,
+                            transparent = transparentContentSurfaces.value,
+                            showBalance = showHistoryBalances.value,
+                            showIcon = showHistoryIcons.value,
                             onEdit = { editingRecord = card }
                         )
                     }
@@ -430,6 +445,7 @@ private fun ModernSideCards(
     selectedCardId: String?,
     balanceColor: Color,
     backgroundColor: Color,
+    transparent: Boolean,
     cardBackgroundImageUris: Map<String, String>,
     defaultBackgroundImageUri: String?,
     onSelectCard: (String) -> Unit
@@ -451,7 +467,9 @@ private fun ModernSideCards(
                     .height(72.dp)
                     .clickable { onSelectCard(summary.cardId) },
                 shape = RoundedCornerShape(8.dp),
-                colors = CardDefaults.cardColors(containerColor = backgroundColor),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (transparent) Color.Transparent else backgroundColor
+                ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
                 Box {
@@ -500,6 +518,8 @@ private fun BalanceSummary(
     deleteButtonColor: Color,
     summaryBackgroundImage: ImageBitmap?,
     modern: Boolean,
+    transparent: Boolean,
+    showBalanceDate: Boolean,
     showReadNotice: Boolean,
     showDeleteButton: Boolean,
     onCopyJson: () -> Unit,
@@ -512,7 +532,9 @@ private fun BalanceSummary(
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = balanceBackgroundColor),
+        colors = CardDefaults.cardColors(
+            containerColor = if (transparent) Color.Transparent else balanceBackgroundColor
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -594,11 +616,13 @@ private fun BalanceSummary(
                         style = if (modern) MaterialTheme.typography.displayLarge else MaterialTheme.typography.displaySmall,
                         fontWeight = FontWeight.Bold
                     )
-                    Text(
-                        text = summary?.latestRecord?.date ?: "履歴はまだありません",
-                        color = Color(0xFFC2E8DE),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    if (showBalanceDate) {
+                        Text(
+                            text = summary?.latestRecord?.date ?: "履歴はまだありません",
+                            color = Color(0xFFC2E8DE),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
                 if (showDeleteButton) {
                     IconButton(
@@ -654,6 +678,7 @@ private fun CardBalanceRow(
     isRead: Boolean,
     balanceColor: Color,
     otherCardBackgroundColor: Color,
+    transparent: Boolean,
     backgroundImageUri: String?,
     onClick: () -> Unit
 ) {
@@ -664,7 +689,8 @@ private fun CardBalanceRow(
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.surfaceVariant else otherCardBackgroundColor
+            containerColor = if (transparent) Color.Transparent
+                else if (selected) MaterialTheme.colorScheme.surfaceVariant else otherCardBackgroundColor
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
@@ -918,6 +944,9 @@ private fun ModernHistoryItem(
     card: TransitHistoryRecord,
     balanceColor: Color,
     showInternalCodes: Boolean,
+    transparent: Boolean,
+    showBalance: Boolean,
+    showIcon: Boolean,
     onEdit: () -> Unit
 ) {
     val special = card.isSpecialActivity()
@@ -943,7 +972,7 @@ private fun ModernHistoryItem(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surface,
+        color = if (transparent) Color.Transparent else MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp
     ) {
         SelectionContainer {
@@ -952,13 +981,15 @@ private fun ModernHistoryItem(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.Top
             ) {
-                Surface(
-                    modifier = Modifier.size(32.dp),
-                    shape = CircleShape,
-                    color = if (special) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        HistoryRecordIcon(card = card, color = MaterialTheme.colorScheme.onSurface)
+                if (showIcon) {
+                    Surface(
+                        modifier = Modifier.size(32.dp),
+                        shape = CircleShape,
+                        color = if (special) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            HistoryRecordIcon(card = card, color = MaterialTheme.colorScheme.onSurface)
+                        }
                     }
                 }
                 Column(
@@ -1007,12 +1038,14 @@ private fun ModernHistoryItem(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Text(
-                        text = card.balanceText(),
-                        color = balanceColor,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    if (showBalance) {
+                        Text(
+                            text = card.balanceText(),
+                            color = balanceColor,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
         }
@@ -1076,12 +1109,17 @@ private fun HistoryCard(
     isLatest: Boolean,
     balanceColor: Color,
     showInternalCodes: Boolean,
+    transparent: Boolean,
+    showBalance: Boolean,
+    showIcon: Boolean,
     onEdit: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (transparent) Color.Transparent else MaterialTheme.colorScheme.surface
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isLatest) 2.dp else 0.dp)
     ) {
         SelectionContainer {
@@ -1098,14 +1136,22 @@ private fun HistoryCard(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text(
-                            text = card.action ?: card.kind ?: "利用履歴",
-                            color = MaterialTheme.colorScheme.onSurface,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (showIcon) {
+                                HistoryRecordIcon(card = card, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                            Text(
+                                text = card.action ?: card.kind ?: "利用履歴",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         Text(
                             text = card.date ?: "-",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1119,12 +1165,14 @@ private fun HistoryCard(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            text = card.balanceText(),
-                            color = balanceColor,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
+                        if (showBalance) {
+                            Text(
+                                text = card.balanceText(),
+                                color = balanceColor,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
 
@@ -1328,11 +1376,13 @@ private fun RouteLine(label: String, company: String?, line: String?, station: S
 }
 
 @Composable
-private fun EmptyHistoryCard() {
+private fun EmptyHistoryCard(transparent: Boolean) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (transparent) Color.Transparent else MaterialTheme.colorScheme.surface
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
@@ -1570,6 +1620,19 @@ fun SettingsScreen(
     val widgetImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { persistSafeImageUri(context, it) }?.let(viewModel::setWidgetBackgroundImageUri)
     }
+    val themeImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { persistSafeImageUri(context, it) }?.let { imageUri ->
+            viewModel.setThemeBackgroundImageUri(imageUri)
+            viewModel.setThemeMode(com.example.suicanfcreader.model.AppThemeMode.CUSTOM_IMAGE)
+        }
+    }
+    var pendingBottomTabIconKind by remember { mutableStateOf<String?>(null) }
+    val bottomTabIconPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        pendingBottomTabIconKind?.let { kind ->
+            viewModel.setBottomTabIconUri(kind, uri?.let { persistSafeImageUri(context, it) })
+        }
+        pendingBottomTabIconKind = null
+    }
     val backupSaveLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -1592,6 +1655,11 @@ fun SettingsScreen(
         widgetBackgroundColorHex = viewModel.widgetBackgroundColorHex.observeAsState("#000000").value,
         summaryBackgroundImageUri = viewModel.summaryBackgroundImageUri.observeAsState().value,
         widgetBackgroundImageUri = viewModel.widgetBackgroundImageUri.observeAsState().value,
+        themeBackgroundImageUri = viewModel.themeBackgroundImageUri.observeAsState().value,
+        themeBackgroundDimAmount = viewModel.themeBackgroundDimAmount.observeAsState(42).value,
+        bottomTabIconUris = viewModel.bottomTabIconUris.observeAsState(emptyMap()).value,
+        widgetPrivacyMode = viewModel.widgetPrivacyMode.observeAsState(true).value,
+        transparentContentSurfaces = viewModel.useTransparentContentSurfaces.observeAsState(false).value,
         useSearchIcon = viewModel.useSearchIcon.observeAsState(true).value,
         showLegacySearchBar = viewModel.showLegacySearchBar.observeAsState(false).value,
         showCardBalances = viewModel.showCardBalances.observeAsState(true).value,
@@ -1604,6 +1672,9 @@ fun SettingsScreen(
         showMoreMenu = viewModel.showMoreMenu.observeAsState(true).value,
         showInternalCodes = viewModel.showInternalCodes.observeAsState(false).value,
         showHistoryHeader = viewModel.showHistoryHeader.observeAsState(true).value,
+        showBalanceDate = viewModel.showBalanceDate.observeAsState(true).value,
+        showHistoryBalances = viewModel.showHistoryBalances.observeAsState(true).value,
+        showHistoryIcons = viewModel.showHistoryIcons.observeAsState(true).value,
         demoMode = viewModel.demoMode.observeAsState(false).value,
         featureFlags = viewModel.featureFlags.observeAsState(emptyMap()).value,
         onDismiss = onBack,
@@ -1621,6 +1692,16 @@ fun SettingsScreen(
         onClearAllBackgroundImages = viewModel::clearAllBackgroundImages,
         onPickWidgetBackgroundImage = { widgetImagePicker.launch(arrayOf("image/*")) },
         onClearWidgetBackgroundImage = { viewModel.setWidgetBackgroundImageUri(null) },
+        onPickThemeBackgroundImage = { themeImagePicker.launch(arrayOf("image/*")) },
+        onClearThemeBackgroundImage = { viewModel.setThemeBackgroundImageUri(null) },
+        onThemeBackgroundDimAmountChanged = viewModel::setThemeBackgroundDimAmount,
+        onWidgetPrivacyModeChanged = viewModel::setWidgetPrivacyMode,
+        onTransparentContentSurfacesChanged = viewModel::setUseTransparentContentSurfaces,
+        onPickBottomTabIcon = { kind ->
+            pendingBottomTabIconKind = kind
+            bottomTabIconPicker.launch(arrayOf("image/*"))
+        },
+        onClearBottomTabIcon = viewModel::setBottomTabIconUri,
         onUseSearchIconChanged = viewModel::setUseSearchIcon,
         onShowLegacySearchBarChanged = viewModel::setShowLegacySearchBar,
         onShowCardBalancesChanged = viewModel::setShowCardBalances,
@@ -1633,6 +1714,9 @@ fun SettingsScreen(
         onShowMoreMenuChanged = viewModel::setShowMoreMenu,
         onShowInternalCodesChanged = viewModel::setShowInternalCodes,
         onShowHistoryHeaderChanged = viewModel::setShowHistoryHeader,
+        onShowBalanceDateChanged = viewModel::setShowBalanceDate,
+        onShowHistoryBalancesChanged = viewModel::setShowHistoryBalances,
+        onShowHistoryIconsChanged = viewModel::setShowHistoryIcons,
         onDemoModeChanged = viewModel::setDemoMode,
         onFeatureChanged = viewModel::setFeatureEnabled,
         onExportBackup = { backupSaveLauncher.launch("suicanfc-kd-backup.json") },
@@ -1668,6 +1752,11 @@ private fun SettingsContent(
     widgetBackgroundColorHex: String,
     summaryBackgroundImageUri: String?,
     widgetBackgroundImageUri: String?,
+    themeBackgroundImageUri: String?,
+    themeBackgroundDimAmount: Int,
+    bottomTabIconUris: Map<String, String?>,
+    widgetPrivacyMode: Boolean,
+    transparentContentSurfaces: Boolean,
     useSearchIcon: Boolean,
     showLegacySearchBar: Boolean,
     showCardBalances: Boolean,
@@ -1680,6 +1769,9 @@ private fun SettingsContent(
     showMoreMenu: Boolean,
     showInternalCodes: Boolean,
     showHistoryHeader: Boolean,
+    showBalanceDate: Boolean,
+    showHistoryBalances: Boolean,
+    showHistoryIcons: Boolean,
     demoMode: Boolean,
     featureFlags: Map<String, Boolean>,
     onDismiss: () -> Unit,
@@ -1697,6 +1789,13 @@ private fun SettingsContent(
     onClearAllBackgroundImages: () -> Unit,
     onPickWidgetBackgroundImage: () -> Unit,
     onClearWidgetBackgroundImage: () -> Unit,
+    onPickThemeBackgroundImage: () -> Unit,
+    onClearThemeBackgroundImage: () -> Unit,
+    onThemeBackgroundDimAmountChanged: (Int) -> Unit,
+    onWidgetPrivacyModeChanged: (Boolean) -> Unit,
+    onTransparentContentSurfacesChanged: (Boolean) -> Unit,
+    onPickBottomTabIcon: (String) -> Unit,
+    onClearBottomTabIcon: (String, String?) -> Unit,
     onUseSearchIconChanged: (Boolean) -> Unit,
     onShowLegacySearchBarChanged: (Boolean) -> Unit,
     onShowCardBalancesChanged: (Boolean) -> Unit,
@@ -1709,6 +1808,9 @@ private fun SettingsContent(
     onShowMoreMenuChanged: (Boolean) -> Unit,
     onShowInternalCodesChanged: (Boolean) -> Unit,
     onShowHistoryHeaderChanged: (Boolean) -> Unit,
+    onShowBalanceDateChanged: (Boolean) -> Unit,
+    onShowHistoryBalancesChanged: (Boolean) -> Unit,
+    onShowHistoryIconsChanged: (Boolean) -> Unit,
     onDemoModeChanged: (Boolean) -> Unit,
     onFeatureChanged: (String, Boolean) -> Unit,
     onExportBackup: () -> Unit,
@@ -1843,10 +1945,62 @@ private fun SettingsContent(
                         Text("ウィジェット背景画像を選択")
                     }
                 }
+                item {
+                    FeatureFlagRow(
+                        label = "ウィジェットに残高・履歴を表示",
+                        checked = !widgetPrivacyMode,
+                        onCheckedChange = { onWidgetPrivacyModeChanged(!it) }
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "残高・履歴エリアを透明にする",
+                        checked = transparentContentSurfaces,
+                        onCheckedChange = onTransparentContentSurfacesChanged
+                    )
+                }
                 if (widgetBackgroundImageUri != null) {
                     item {
                         OutlinedButton(onClick = onClearWidgetBackgroundImage, shape = RoundedCornerShape(8.dp)) {
                             Text("ウィジェット背景画像を解除")
+                        }
+                    }
+                }
+                item {
+                    Button(onClick = onPickThemeBackgroundImage, shape = RoundedCornerShape(8.dp)) {
+                        Text("アプリ背景画像を選択")
+                    }
+                }
+                if (themeBackgroundImageUri != null) {
+                    item {
+                        OutlinedButton(onClick = onClearThemeBackgroundImage, shape = RoundedCornerShape(8.dp)) {
+                            Text("アプリ背景画像を解除")
+                        }
+                    }
+                }
+                item {
+                    Column {
+                        Text("背景画像の暗さ: ${themeBackgroundDimAmount}%")
+                        Slider(
+                            value = themeBackgroundDimAmount.toFloat(),
+                            onValueChange = { onThemeBackgroundDimAmountChanged(it.toInt()) },
+                            valueRange = 0f..100f
+                        )
+                        Text("0% にすると背景画像を暗くせず表示します", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                item { Text("下部タブのアイコン", style = MaterialTheme.typography.titleMedium) }
+                listOf("card" to "カード", "stats" to "統計", "settings" to "設定").forEach { (kind, label) ->
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { onPickBottomTabIcon(kind) }, shape = RoundedCornerShape(8.dp)) {
+                                Text("$label アイコンを選択")
+                            }
+                            if (bottomTabIconUris[kind] != null) {
+                                OutlinedButton(onClick = { onClearBottomTabIcon(kind, null) }, shape = RoundedCornerShape(8.dp)) {
+                                    Text("解除")
+                                }
+                            }
                         }
                     }
                 }
@@ -1984,6 +2138,27 @@ private fun SettingsContent(
                         label = "履歴の見出しと件数を表示",
                         checked = showHistoryHeader,
                         onCheckedChange = onShowHistoryHeaderChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "残高エリアの日付を表示",
+                        checked = showBalanceDate,
+                        onCheckedChange = onShowBalanceDateChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "履歴の取引後残高を表示",
+                        checked = showHistoryBalances,
+                        onCheckedChange = onShowHistoryBalancesChanged
+                    )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "履歴の交通・物販・チャージアイコンを表示",
+                        checked = showHistoryIcons,
+                        onCheckedChange = onShowHistoryIconsChanged
                     )
                 }
                 item {
