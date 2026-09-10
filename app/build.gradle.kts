@@ -8,8 +8,8 @@ plugins {
 }
 
 val appId = "io.github.kdroidwin.suicanfc"
-val verCode = 128
-val verId = "1.5.7"
+val verCode = 131
+val verId = "1.6.2"
 val signingProperties = Properties().apply {
     val signingFile = file("keystore.properties")
     require(signingFile.exists()) { "Missing app/keystore.properties for release signing" }

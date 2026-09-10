@@ -2,6 +2,12 @@
 
 import android.app.Activity
 import android.graphics.Color.TRANSPARENT
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
@@ -25,12 +31,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -53,12 +64,31 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
     val showMoreMenu = viewModel.showMoreMenu.observeAsState(true)
     val useModernUi = viewModel.useModernUi.observeAsState(true)
     val showBottomTabLabels = viewModel.showBottomTabLabels.observeAsState(true)
+    val themeBackgroundImageUri = viewModel.themeBackgroundImageUri.observeAsState().value
+    val themeBackgroundDimAmount = viewModel.themeBackgroundDimAmount.observeAsState(42).value
+    val bottomTabIconUris = viewModel.bottomTabIconUris.observeAsState(emptyMap()).value
+    val context = LocalContext.current.applicationContext
+    val themeImage = rememberImageBitmap(context, themeBackgroundImageUri)
 
     SuicaNFCReaderTheme(themeMode = themeMode.value, accentColorHex = accentColorHex.value) {
         val navController = rememberNavController()
         val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
         ApplySystemBars(themeMode.value)
 
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (themeMode.value == AppThemeMode.CUSTOM_IMAGE && themeImage != null) {
+                Image(
+                    bitmap = themeImage,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = themeBackgroundDimAmount / 100f))
+                )
+            }
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
@@ -97,6 +127,7 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
                 if (useModernUi.value) {
                     AppNavigationBar(
                         showLabels = showBottomTabLabels.value,
+                        iconUris = bottomTabIconUris,
                         currentRoute = currentRoute,
                         onCards = {
                             navController.navigate(Screen.TopScreen.route) {
@@ -116,8 +147,19 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
                 viewModel
             )
         }
+        }
     }
 }
+
+@Composable
+private fun rememberImageBitmap(context: android.content.Context, uriText: String?) =
+    produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, uriText) {
+        value = uriText?.let { text ->
+            runCatching {
+                context.contentResolver.openInputStream(Uri.parse(text))?.use(BitmapFactory::decodeStream)?.asImageBitmap()
+            }.getOrNull()
+        }
+    }.value
 
 @Composable
 private fun SearchIcon() {
@@ -202,6 +244,7 @@ private fun MoreMenu(
 @Composable
 private fun AppNavigationBar(
     showLabels: Boolean,
+    iconUris: Map<String, String?>,
     currentRoute: String?,
     onCards: () -> Unit,
     onStats: () -> Unit,
@@ -211,23 +254,38 @@ private fun AppNavigationBar(
         NavigationBarItem(
             selected = currentRoute == Screen.TopScreen.route,
             onClick = onCards,
-            icon = { NavigationSymbol("card") },
-            label = if (showLabels) {{ Text("カード") }} else null,
+            icon = { NavigationIcon(iconUris["card"], "card") },
+            label = if (showLabels) { { Text("カード") } } else null,
             alwaysShowLabel = showLabels
         )
         NavigationBarItem(
             selected = currentRoute == Screen.Stats.route,
             onClick = onStats,
-            icon = { NavigationSymbol("stats") },
-            label = if (showLabels) {{ Text("統計") }} else null,
+            icon = { NavigationIcon(iconUris["stats"], "stats") },
+            label = if (showLabels) { { Text("統計") } } else null,
             alwaysShowLabel = showLabels
         )
         NavigationBarItem(
             selected = currentRoute == Screen.Settings.route,
             onClick = onSettings,
-            icon = { NavigationSymbol("settings") },
-            label = if (showLabels) {{ Text("設定") }} else null,
+            icon = { NavigationIcon(iconUris["settings"], "settings") },
+            label = if (showLabels) { { Text("設定") } } else null,
             alwaysShowLabel = showLabels
+        )
+    }
+}
+
+@Composable
+private fun NavigationIcon(uriText: String?, kind: String) {
+    val image = rememberImageBitmap(LocalContext.current.applicationContext, uriText)
+    if (image == null) {
+        NavigationSymbol(kind)
+    } else {
+        Image(
+            bitmap = image,
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.size(24.dp)
         )
     }
 }
