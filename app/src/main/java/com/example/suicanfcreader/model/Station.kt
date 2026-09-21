@@ -70,16 +70,17 @@ data class Station(
         private fun readStationCsv(context: Context): StationCache {
             val byAreaLineStation = linkedMapOf<String, Station>()
 
-            try {
-                context.assets.open("StationCode.csv").use { inputStream ->
+            listOf("StationCode.csv", "StationCodeExtra.csv").forEach assetLoop@ { assetName ->
+                try {
+                context.assets.open(assetName).use { inputStream ->
                     BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).use { br ->
-                        br.lineSequence().forEach { line ->
+                        br.lineSequence().forEach lineLoop@ { line ->
                             val tokens = line.split(",").map { it.trim() }
                             if (tokens.size >= 6) {
-                                val region = tokens[0].toIntOrNull() ?: return@forEach
-                                val lineCode = tokens[1].toIntOrNull() ?: return@forEach
-                                val stationCode = tokens[2].toIntOrNull() ?: return@forEach
-                                if (lineCode == 0 && stationCode == 0) return@forEach
+                                val region = tokens[0].toIntOrNull() ?: return@lineLoop
+                                val lineCode = tokens[1].toIntOrNull() ?: return@lineLoop
+                                val stationCode = tokens[2].toIntOrNull() ?: return@lineLoop
+                                if (lineCode == 0 && stationCode == 0) return@lineLoop
 
                                 val station = Station(
                                     regionCode = region,
@@ -92,8 +93,9 @@ data class Station(
                         }
                     }
                 }
-            } catch (_: IOException) {
-                Log.w(TAG, "Station database could not be loaded")
+                } catch (_: IOException) {
+                    Log.w(TAG, "Station database $assetName could not be loaded")
+                }
             }
 
             return StationCache(byAreaLineStation = byAreaLineStation)
@@ -102,15 +104,16 @@ data class Station(
         private fun readBusStopCsv(context: Context): StationCache {
             val byAreaLineStation = linkedMapOf<String, Station>()
 
-            try {
-                context.assets.open("BusCode.csv").use { inputStream ->
+            listOf("BusCode.csv", "BusCodeExtra.csv").forEach assetLoop@ { assetName ->
+                try {
+                context.assets.open(assetName).use { inputStream ->
                     BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).use { br ->
-                        br.lineSequence().forEach { line ->
+                        br.lineSequence().forEach lineLoop@ { line ->
                             val tokens = line.split(",").map { it.trim().trim('"') }
                             if (tokens.size >= 5) {
-                                val lineCode = tokens[0].toIntOrNull(16) ?: return@forEach
-                                val stationCode = tokens[1].toIntOrNull(16) ?: return@forEach
-                                if (lineCode == 0 && stationCode == 0) return@forEach
+                                val lineCode = tokens[0].toIntOrNull(16) ?: return@lineLoop
+                                val stationCode = tokens[1].toIntOrNull(16) ?: return@lineLoop
+                                if (lineCode == 0 && stationCode == 0) return@lineLoop
 
                                 val station = Station(
                                     regionCode = 0,
@@ -123,8 +126,9 @@ data class Station(
                         }
                     }
                 }
-            } catch (_: IOException) {
-                Log.w(TAG, "Bus stop database could not be loaded")
+                } catch (_: IOException) {
+                    Log.w(TAG, "Bus stop database $assetName could not be loaded")
+                }
             }
 
             return StationCache(byAreaLineStation = byAreaLineStation)

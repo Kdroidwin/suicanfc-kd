@@ -94,6 +94,7 @@ android {
         abortOnError = true
         warningsAsErrors = true
     }
+
 }
 
 fun releaseTime(): String {

@@ -52,6 +52,13 @@ data class Card(
             }
             val inStationDetails = stationPair?.first
             val outStationDetails = stationPair?.second
+            // SF history identifies a merchant only for some Suica C7/C8 records.  The same
+            // numeric code is reused by other transit-card brands, so never use it for them.
+            val merchantDetails = if (felica.isShoppingRecord()) {
+                context?.let { Merchant.getSuicaMerchant(it, felica.termId, felica.busStop) }
+            } else {
+                null
+            }
 
             return Card().apply {
                 date = "%04d/%02d/%02d".format(2000 + felica.year, felica.month, felica.day)
@@ -60,14 +67,16 @@ data class Card(
                 kind = felica.kind
                 device = felica.device
                 action = felica.action
-                inLine = inStationDetails?.lineName ?: chargeStationDetails?.lineName ?: busStopDetails?.lineName
-                inStation = inStationDetails?.stationName ?: chargeStationDetails?.stationName ?: busStopDetails?.stationName
-                inCompany = inStationDetails?.company ?: chargeStationDetails?.company ?: busStopDetails?.company
+                inLine = merchantDetails?.store ?: inStationDetails?.lineName ?: chargeStationDetails?.lineName ?: busStopDetails?.lineName
+                inStation = merchantDetails?.detail ?: inStationDetails?.stationName ?: chargeStationDetails?.stationName ?: busStopDetails?.stationName
+                inCompany = merchantDetails?.brand ?: inStationDetails?.company ?: chargeStationDetails?.company ?: busStopDetails?.company
                 outLine = outStationDetails?.lineName
                 outStation = outStationDetails?.stationName
                 outCompany = outStationDetails?.company
                 balance = felica.remain.toString()
-                internalCode = if (felica.isBusRecord() && !felica.isChargeRecord() && !felica.isShoppingRecord()) {
+                internalCode = if (felica.isShoppingRecord()) {
+                    "Terminal=%02X Shop=%04X".format(felica.termId, felica.busStop)
+                } else if (felica.isBusRecord() && !felica.isChargeRecord() && !felica.isShoppingRecord()) {
                     "Bus=%04X Stop=%04X".format(felica.busLine, felica.busStop)
                 } else {
                     "Area=%d In=%d/%d Out=%d/%d".format(
