@@ -2,6 +2,22 @@ package com.example.suicanfcreader.lib
 
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.util.Locale
+
+data class GatePassageRecord(
+    val lineCode: Int,
+    val stationCode: Int,
+    val isEntry: Boolean,
+    val date: String,
+    val time: String
+)
+
+data class GatePassageStationCodes(
+    val inLineCode: Int,
+    val inStationCode: Int,
+    val outLineCode: Int,
+    val outStationCode: Int
+)
 
 class SuicaReader {
     var termId = 0
@@ -116,8 +132,14 @@ class SuicaReader {
         @JvmStatic
         @Throws(IOException::class)
         fun readWithoutEncryption(idm: ByteArray, startBlock: Int, size: Int): ByteArray {
+            return readWithoutEncryption(idm, startBlock, size, SERVICE_TRANSACTION_HISTORY)
+        }
+
+        @JvmStatic
+        @Throws(IOException::class)
+        fun readWithoutEncryption(idm: ByteArray, startBlock: Int, size: Int, serviceCode: Int): ByteArray {
             if (idm.size != 8) throw IOException("Invalid FeliCa IDm")
-            if (startBlock !in 0..255 || size !in 1..10 || startBlock + size > 256) {
+            if (startBlock !in 0..255 || size !in 1..10 || startBlock + size > 256 || serviceCode !in 0..0xffff) {
                 throw IOException("Invalid FeliCa block range")
             }
             return ByteArrayOutputStream(100).use { output ->
@@ -125,8 +147,9 @@ class SuicaReader {
                 output.write(0x06)
                 output.write(idm)
                 output.write(1)
-                output.write(0x0f)
-                output.write(0x09)
+                // FeliCa service codes are transmitted least-significant byte first.
+                output.write(serviceCode and 0xff)
+                output.write((serviceCode shr 8) and 0xff)
                 output.write(size)
                 repeat(size) { index ->
                     output.write(0x80)
@@ -134,6 +157,63 @@ class SuicaReader {
                 }
                 output.toByteArray().also { it[0] = it.size.toByte() }
             }
+        }
+
+        @JvmStatic
+        fun parseGatePassageRecord(data: ByteArray, offset: Int = 0): GatePassageRecord? {
+            if (offset < 0 || data.size - offset < HISTORY_BLOCK_SIZE) return null
+
+            val gateType = unsigned(data[offset])
+            val deviceCode = unsigned(data[offset + 4])
+            val isEntry = when {
+                gateType == 0xa0 || gateType == 0xc0 -> true
+                gateType == 0x20 || gateType == 0x40 -> false
+                deviceCode == 0x10 -> true // JR East tap-on marker
+                deviceCode == 0x20 -> false // JR East tap-off marker
+                else -> return null
+            }
+
+            val dateBits = (unsigned(data[offset + 6]) shl 8) or unsigned(data[offset + 7])
+            val year = ((dateBits shr 9) and 0x7f) + 2000
+            val month = (dateBits shr 5) and 0x0f
+            val day = dateBits and 0x1f
+            if (month !in 1..12 || day !in 1..daysInMonth(year, month)) return null
+
+            val hour = fromBcd(unsigned(data[offset + 8])) ?: return null
+            val minute = fromBcd(unsigned(data[offset + 9])) ?: return null
+            if (hour !in 0..23 || minute !in 0..59) return null
+
+            val lineCode = unsigned(data[offset + 2])
+            val stationCode = unsigned(data[offset + 3])
+            if (lineCode == 0 && stationCode == 0) return null
+
+            return GatePassageRecord(
+                lineCode = lineCode,
+                stationCode = stationCode,
+                isEntry = isEntry,
+                date = "%04d/%02d/%02d".format(Locale.US, year, month, day),
+                time = "%02d:%02d".format(Locale.US, hour, minute)
+            )
+        }
+
+        @JvmStatic
+        fun parseGatePassageStationCodes(internalCode: String?): GatePassageStationCodes? {
+            val groups = internalCode
+                ?.let { INTERNAL_STATION_CODES.matchEntire(it)?.groupValues }
+                ?: return null
+            return GatePassageStationCodes(
+                inLineCode = groups[1].toIntOrNull() ?: return null,
+                inStationCode = groups[2].toIntOrNull() ?: return null,
+                outLineCode = groups[3].toIntOrNull() ?: return null,
+                outStationCode = groups[4].toIntOrNull() ?: return null
+            )
+        }
+
+        private fun fromBcd(value: Int): Int? {
+            val tens = (value shr 4) and 0x0f
+            val ones = value and 0x0f
+            if (tens > 9 || ones > 9) return null
+            return tens * 10 + ones
         }
 
         private fun unsigned(value: Byte): Int = value.toInt() and 0x0ff
@@ -147,5 +227,9 @@ class SuicaReader {
         private val BYTE_VALUE_RANGE = 0..0xff
         private val BUS_CODE_RANGE = 0..0xffff
         private const val MAX_TRANSIT_BALANCE = 20_000
+        private const val HISTORY_BLOCK_SIZE = 16
+        private val INTERNAL_STATION_CODES = Regex("Area=\\d+ In=(\\d+)/(\\d+) Out=(\\d+)/(\\d+)")
+        const val SERVICE_TRANSACTION_HISTORY = 0x090f
+        const val SERVICE_GATE_PASSAGE_HISTORY = 0x108f
     }
 }

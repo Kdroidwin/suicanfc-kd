@@ -6,6 +6,8 @@ import com.example.suicanfcreader.lib.SuicaReader
 data class Card(
     var cardId: String? = null,
     var date: String? = null,
+    var inGatePassageTime: String? = null,
+    var outGatePassageTime: String? = null,
     var number: String? = null,
     var payment: String? = null,
     var amount: String? = null,
