@@ -114,6 +114,7 @@ fun TopScreen(
     val showBalanceDate = topScreenViewModel.showBalanceDate.observeAsState(true)
     val showHistoryBalances = topScreenViewModel.showHistoryBalances.observeAsState(true)
     val showHistoryIcons = topScreenViewModel.showHistoryIcons.observeAsState(true)
+    val showGatePassageTime = topScreenViewModel.showGatePassageTime.observeAsState(true)
     val transparentContentSurfaces = topScreenViewModel.useTransparentContentSurfaces.observeAsState(false)
     val readCardIds = topScreenViewModel.readCardIds.observeAsState(emptySet())
     val clipboardManager: ClipboardManager = LocalClipboardManager.current
@@ -282,6 +283,7 @@ fun TopScreen(
                             transparent = transparentContentSurfaces.value,
                             showBalance = showHistoryBalances.value,
                             showIcon = showHistoryIcons.value,
+                            showGatePassageTime = showGatePassageTime.value,
                             onEdit = { editingRecord = card }
                         )
                     } else {
@@ -294,6 +296,7 @@ fun TopScreen(
                             transparent = transparentContentSurfaces.value,
                             showBalance = showHistoryBalances.value,
                             showIcon = showHistoryIcons.value,
+                            showGatePassageTime = showGatePassageTime.value,
                             onEdit = { editingRecord = card }
                         )
                     }
@@ -940,6 +943,21 @@ private fun DateHeader(text: String) {
 }
 
 @Composable
+private fun GatePassageTimeLine(card: TransitHistoryRecord) {
+    val times = buildList {
+        card.inGatePassageTime?.let { add("入場 $it") }
+        card.outGatePassageTime?.let { add("出場 $it") }
+    }
+    if (times.isEmpty()) return
+    Text(
+        text = "改札時刻  ${times.joinToString(" / ")}",
+        color = MaterialTheme.colorScheme.primary,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium
+    )
+}
+
+@Composable
 private fun ModernHistoryItem(
     card: TransitHistoryRecord,
     balanceColor: Color,
@@ -947,6 +965,7 @@ private fun ModernHistoryItem(
     transparent: Boolean,
     showBalance: Boolean,
     showIcon: Boolean,
+    showGatePassageTime: Boolean,
     onEdit: () -> Unit
 ) {
     val special = card.isSpecialActivity()
@@ -1011,6 +1030,7 @@ private fun ModernHistoryItem(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    if (showGatePassageTime) GatePassageTimeLine(card)
                     if (showInternalCodes && !card.internalCode.isNullOrBlank()) {
                         Text(
                             text = card.internalCode.orEmpty(),
@@ -1112,6 +1132,7 @@ private fun HistoryCard(
     transparent: Boolean,
     showBalance: Boolean,
     showIcon: Boolean,
+    showGatePassageTime: Boolean,
     onEdit: () -> Unit
 ) {
     Card(
@@ -1157,6 +1178,7 @@ private fun HistoryCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium
                         )
+                        if (showGatePassageTime) GatePassageTimeLine(card)
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
@@ -1675,6 +1697,7 @@ fun SettingsScreen(
         showBalanceDate = viewModel.showBalanceDate.observeAsState(true).value,
         showHistoryBalances = viewModel.showHistoryBalances.observeAsState(true).value,
         showHistoryIcons = viewModel.showHistoryIcons.observeAsState(true).value,
+        showGatePassageTime = viewModel.showGatePassageTime.observeAsState(true).value,
         demoMode = viewModel.demoMode.observeAsState(false).value,
         featureFlags = viewModel.featureFlags.observeAsState(emptyMap()).value,
         onDismiss = onBack,
@@ -1717,6 +1740,7 @@ fun SettingsScreen(
         onShowBalanceDateChanged = viewModel::setShowBalanceDate,
         onShowHistoryBalancesChanged = viewModel::setShowHistoryBalances,
         onShowHistoryIconsChanged = viewModel::setShowHistoryIcons,
+        onShowGatePassageTimeChanged = viewModel::setShowGatePassageTime,
         onDemoModeChanged = viewModel::setDemoMode,
         onFeatureChanged = viewModel::setFeatureEnabled,
         onExportBackup = { backupSaveLauncher.launch("suicanfc-kd-backup.json") },
@@ -1772,6 +1796,7 @@ private fun SettingsContent(
     showBalanceDate: Boolean,
     showHistoryBalances: Boolean,
     showHistoryIcons: Boolean,
+    showGatePassageTime: Boolean,
     demoMode: Boolean,
     featureFlags: Map<String, Boolean>,
     onDismiss: () -> Unit,
@@ -1811,6 +1836,7 @@ private fun SettingsContent(
     onShowBalanceDateChanged: (Boolean) -> Unit,
     onShowHistoryBalancesChanged: (Boolean) -> Unit,
     onShowHistoryIconsChanged: (Boolean) -> Unit,
+    onShowGatePassageTimeChanged: (Boolean) -> Unit,
     onDemoModeChanged: (Boolean) -> Unit,
     onFeatureChanged: (String, Boolean) -> Unit,
     onExportBackup: () -> Unit,
@@ -2160,6 +2186,21 @@ private fun SettingsContent(
                         checked = showHistoryIcons,
                         onCheckedChange = onShowHistoryIconsChanged
                     )
+                }
+                item {
+                    Column {
+                        FeatureFlagRow(
+                            label = "改札通過時刻を表示",
+                            checked = showGatePassageTime,
+                            onCheckedChange = onShowGatePassageTimeChanged
+                        )
+                        Text(
+                            text = "カードから改札ログを取得できた直近の履歴だけに時刻を表示します。",
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
                 item {
                     Text(

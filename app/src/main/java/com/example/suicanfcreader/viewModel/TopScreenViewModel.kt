@@ -15,6 +15,7 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.suicanfcreader.lib.GatePassageRecord
 import com.example.suicanfcreader.lib.SuicaReader
 import com.example.suicanfcreader.model.AppThemeMode
 import com.example.suicanfcreader.model.Card
@@ -218,6 +219,10 @@ class TopScreenViewModel(
     private val _showHistoryIcons =
         MutableLiveData(preferences.getBoolean(KEY_SHOW_HISTORY_ICONS, true))
     val showHistoryIcons: LiveData<Boolean> = _showHistoryIcons
+
+    private val _showGatePassageTime =
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, true))
+    val showGatePassageTime: LiveData<Boolean> = _showGatePassageTime
 
     private val _demoMode = MutableLiveData(initialDemoMode)
     val demoMode: LiveData<Boolean> = _demoMode
@@ -526,6 +531,11 @@ class TopScreenViewModel(
         _showHistoryIcons.value = show
     }
 
+    fun setShowGatePassageTime(show: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_GATE_PASSAGE_TIME, show).apply()
+        _showGatePassageTime.value = show
+    }
+
     fun showStatsDialog() {
         _statsDialogVisible.value = true
     }
@@ -702,6 +712,7 @@ class TopScreenViewModel(
             put("showBalanceDate", _showBalanceDate.value ?: true)
             put("showHistoryBalances", _showHistoryBalances.value ?: true)
             put("showHistoryIcons", _showHistoryIcons.value ?: true)
+            put("showGatePassageTime", _showGatePassageTime.value ?: true)
             put("demoMode", _demoMode.value ?: false)
             put("features", sanitizeFeatureFlags(JSONObject(preferences.getString(KEY_FEATURE_FLAGS, "{}") ?: "{}")))
         }.toString(2)
@@ -769,6 +780,7 @@ class TopScreenViewModel(
                 .putBoolean(KEY_SHOW_BALANCE_DATE, obj.optBoolean("showBalanceDate", true))
                 .putBoolean(KEY_SHOW_HISTORY_BALANCES, obj.optBoolean("showHistoryBalances", true))
                 .putBoolean(KEY_SHOW_HISTORY_ICONS, obj.optBoolean("showHistoryIcons", true))
+                .putBoolean(KEY_SHOW_GATE_PASSAGE_TIME, obj.optBoolean("showGatePassageTime", true))
                 .putBoolean(KEY_DEMO_MODE, obj.optBoolean("demoMode", false))
                 .putString(KEY_FEATURE_FLAGS, featureFlags.toString())
                 .apply()
@@ -796,6 +808,7 @@ class TopScreenViewModel(
             _showBalanceDate.value = preferences.getBoolean(KEY_SHOW_BALANCE_DATE, true)
             _showHistoryBalances.value = preferences.getBoolean(KEY_SHOW_HISTORY_BALANCES, true)
             _showHistoryIcons.value = preferences.getBoolean(KEY_SHOW_HISTORY_ICONS, true)
+            _showGatePassageTime.value = preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, true)
             _demoMode.value = preferences.getBoolean(KEY_DEMO_MODE, false)
             _useSearchIcon.value = preferences.getBoolean(KEY_USE_SEARCH_ICON, true)
             _showLegacySearchBar.value = preferences.getBoolean(KEY_SHOW_LEGACY_SEARCH_BAR, false)
@@ -858,7 +871,16 @@ class TopScreenViewModel(
             try {
                 felica.connect()
                 val readChunks = readHistoryChunks(felica, id, context, cardId)
-                val cards = withCalculatedAmounts(readChunks.cards)
+                val cardsWithGateTimes = if (preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, true)) {
+                    val gateRecords = runCatching { readGatePassageRecords(felica, id) }
+                        .getOrDefault(emptyList())
+                        .sortedWith(compareByDescending<GatePassageRecord> { it.date }.thenByDescending { it.time })
+                        .toMutableList()
+                    attachGatePassageTimes(readChunks.cards, gateRecords)
+                } else {
+                    readChunks.cards
+                }
+                val cards = withCalculatedAmounts(cardsWithGateTimes)
                 ReadResult(
                     cardId = cardId,
                     cards = cards,
@@ -940,6 +962,56 @@ class TopScreenViewModel(
         return response.size >= HISTORY_RESPONSE_HEADER_SIZE + blockCount * HISTORY_BLOCK_SIZE
     }
 
+    private fun readGatePassageRecords(felica: NfcF, id: ByteArray): List<GatePassageRecord> {
+        val requestedBlocks = GATE_PASSAGE_BLOCK_COUNT
+        val response = felica.transceive(
+            SuicaReader.readWithoutEncryption(
+                idm = id,
+                startBlock = 0,
+                size = requestedBlocks,
+                serviceCode = SuicaReader.SERVICE_GATE_PASSAGE_HISTORY
+            )
+        )
+        if (!isValidHistoryResponse(response, requestedBlocks)) return emptyList()
+
+        val blockCount = response[12].toInt() and 0xff
+        return (0 until blockCount).mapNotNull { index ->
+            val offset = HISTORY_RESPONSE_HEADER_SIZE + index * HISTORY_BLOCK_SIZE
+            SuicaReader.parseGatePassageRecord(response, offset)
+        }
+    }
+
+    private fun attachGatePassageTimes(
+        cards: List<Card>,
+        availableRecords: MutableList<GatePassageRecord>
+    ): List<Card> = cards.map { card ->
+        if (card.kind != "JR" && card.kind != "公営/私鉄") return@map card
+        val codes = INTERNAL_STATION_CODES.matchEntire(card.internalCode.orEmpty()) ?: return@map card
+        val date = card.date ?: return@map card
+        val inLine = codes.groupValues[3].toIntOrNull() ?: return@map card
+        val inStation = codes.groupValues[4].toIntOrNull() ?: return@map card
+        val outLine = codes.groupValues[5].toIntOrNull() ?: return@map card
+        val outStation = codes.groupValues[6].toIntOrNull() ?: return@map card
+        card.apply {
+            inGatePassageTime = takeGatePassageTime(availableRecords, date, inLine, inStation, isEntry = true)
+            outGatePassageTime = takeGatePassageTime(availableRecords, date, outLine, outStation, isEntry = false)
+        }
+    }
+
+    private fun takeGatePassageTime(
+        records: MutableList<GatePassageRecord>,
+        date: String,
+        lineCode: Int,
+        stationCode: Int,
+        isEntry: Boolean
+    ): String? {
+        if (lineCode == 0 && stationCode == 0) return null
+        val index = records.indexOfFirst { record ->
+            record.date == date && record.lineCode == lineCode && record.stationCode == stationCode && record.isEntry == isEntry
+        }
+        return if (index >= 0) records.removeAt(index).time else null
+    }
+
     private fun withCalculatedAmounts(cards: List<Card>): List<Card> {
         return cards.mapIndexed { index, card ->
             val current = card.balance?.toIntOrNull()
@@ -995,7 +1067,9 @@ class TopScreenViewModel(
     private fun Card.withUserEditsFrom(saved: Card): Card {
         val merged = copy(
             memo = saved.memo ?: memo,
-            tags = saved.tags ?: tags
+            tags = saved.tags ?: tags,
+            inGatePassageTime = inGatePassageTime ?: saved.inGatePassageTime,
+            outGatePassageTime = outGatePassageTime ?: saved.outGatePassageTime
         )
         if (!saved.manuallyEdited) return merged
         return merged.copy(
@@ -1152,6 +1226,8 @@ class TopScreenViewModel(
         return JSONObject().apply {
             putNullable("cardId", cardId)
             putNullable("date", date)
+            putNullable("inGatePassageTime", inGatePassageTime)
+            putNullable("outGatePassageTime", outGatePassageTime)
             putNullable("number", number)
             putNullable("payment", payment)
             putNullable("amount", amount)
@@ -1176,6 +1252,8 @@ class TopScreenViewModel(
         return Card(
             cardId = nullableString("cardId"),
             date = nullableString("date"),
+            inGatePassageTime = nullableString("inGatePassageTime"),
+            outGatePassageTime = nullableString("outGatePassageTime"),
             number = nullableString("number"),
             payment = nullableString("payment"),
             amount = nullableString("amount"),
@@ -1444,6 +1522,7 @@ class TopScreenViewModel(
         private const val KEY_SHOW_BALANCE_DATE = "show_balance_date"
         private const val KEY_SHOW_HISTORY_BALANCES = "show_history_balances"
         private const val KEY_SHOW_HISTORY_ICONS = "show_history_icons"
+        private const val KEY_SHOW_GATE_PASSAGE_TIME = "show_gate_passage_time"
         private const val KEY_DEMO_MODE = "demo_mode"
         private const val KEY_FEATURE_FLAGS = "feature_flags"
         private const val DEFAULT_ACCENT_COLOR = "#8AD7C8"
@@ -1471,6 +1550,8 @@ class TopScreenViewModel(
         private const val HISTORY_RESPONSE_HEADER_SIZE = 13
         private const val HISTORY_BLOCK_SIZE = 16
         private const val MAX_HISTORY_RECORDS_PER_RESPONSE = 10
+        private const val GATE_PASSAGE_BLOCK_COUNT = 3
+        private val INTERNAL_STATION_CODES = Regex("Area=(\\d+) In=(\\d+)/(\\d+) Out=(\\d+)/(\\d+)")
         private val NFC_ACTIONS = setOf(
             NfcAdapter.ACTION_TAG_DISCOVERED,
             NfcAdapter.ACTION_TECH_DISCOVERED,
