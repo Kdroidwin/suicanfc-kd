@@ -114,7 +114,7 @@ fun TopScreen(
     val showBalanceDate = topScreenViewModel.showBalanceDate.observeAsState(true)
     val showHistoryBalances = topScreenViewModel.showHistoryBalances.observeAsState(true)
     val showHistoryIcons = topScreenViewModel.showHistoryIcons.observeAsState(true)
-    val showGatePassageTime = topScreenViewModel.showGatePassageTime.observeAsState(true)
+    val showGatePassageTime = topScreenViewModel.showGatePassageTime.observeAsState(false)
     val transparentContentSurfaces = topScreenViewModel.useTransparentContentSurfaces.observeAsState(false)
     val readCardIds = topScreenViewModel.readCardIds.observeAsState(emptySet())
     val clipboardManager: ClipboardManager = LocalClipboardManager.current
@@ -1697,7 +1697,7 @@ fun SettingsScreen(
         showBalanceDate = viewModel.showBalanceDate.observeAsState(true).value,
         showHistoryBalances = viewModel.showHistoryBalances.observeAsState(true).value,
         showHistoryIcons = viewModel.showHistoryIcons.observeAsState(true).value,
-        showGatePassageTime = viewModel.showGatePassageTime.observeAsState(true).value,
+        showGatePassageTime = viewModel.showGatePassageTime.observeAsState(false).value,
         demoMode = viewModel.demoMode.observeAsState(false).value,
         featureFlags = viewModel.featureFlags.observeAsState(emptyMap()).value,
         onDismiss = onBack,
@@ -2195,7 +2195,7 @@ private fun SettingsContent(
                             onCheckedChange = onShowGatePassageTimeChanged
                         )
                         Text(
-                            text = "カードから改札ログを取得できた直近の履歴だけに時刻を表示します。",
+                            text = "対応カードから改札ログを追加取得します。読取に失敗しても通常の履歴は表示されます。初期設定はOFFです。",
                             modifier = Modifier.padding(start = 16.dp, end = 16.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall

@@ -51,6 +51,21 @@ class SuicaReaderGatePassageTest {
         assertEquals(0x10.toByte(), request[12])
     }
 
+    @Test
+    fun parsesAllFourStationCodesForMatchingGatePassageRecords() {
+        val codes = SuicaReader.parseGatePassageStationCodes("Area=7 In=12/34 Out=56/78")
+
+        assertEquals(12, codes?.inLineCode)
+        assertEquals(34, codes?.inStationCode)
+        assertEquals(56, codes?.outLineCode)
+        assertEquals(78, codes?.outStationCode)
+    }
+
+    @Test
+    fun rejectsMalformedStationCodesWithoutThrowing() {
+        assertNull(SuicaReader.parseGatePassageStationCodes("Area=7 In=12/34 Out=56"))
+    }
+
     private fun gateBlock(
         gateType: Int,
         line: Int,

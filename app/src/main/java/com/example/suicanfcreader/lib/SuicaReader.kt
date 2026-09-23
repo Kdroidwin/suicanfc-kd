@@ -12,6 +12,13 @@ data class GatePassageRecord(
     val time: String
 )
 
+data class GatePassageStationCodes(
+    val inLineCode: Int,
+    val inStationCode: Int,
+    val outLineCode: Int,
+    val outStationCode: Int
+)
+
 class SuicaReader {
     var termId = 0
     var procId = 0
@@ -189,6 +196,19 @@ class SuicaReader {
             )
         }
 
+        @JvmStatic
+        fun parseGatePassageStationCodes(internalCode: String?): GatePassageStationCodes? {
+            val groups = internalCode
+                ?.let { INTERNAL_STATION_CODES.matchEntire(it)?.groupValues }
+                ?: return null
+            return GatePassageStationCodes(
+                inLineCode = groups[1].toIntOrNull() ?: return null,
+                inStationCode = groups[2].toIntOrNull() ?: return null,
+                outLineCode = groups[3].toIntOrNull() ?: return null,
+                outStationCode = groups[4].toIntOrNull() ?: return null
+            )
+        }
+
         private fun fromBcd(value: Int): Int? {
             val tens = (value shr 4) and 0x0f
             val ones = value and 0x0f
@@ -208,6 +228,7 @@ class SuicaReader {
         private val BUS_CODE_RANGE = 0..0xffff
         private const val MAX_TRANSIT_BALANCE = 20_000
         private const val HISTORY_BLOCK_SIZE = 16
+        private val INTERNAL_STATION_CODES = Regex("Area=\\d+ In=(\\d+)/(\\d+) Out=(\\d+)/(\\d+)")
         const val SERVICE_TRANSACTION_HISTORY = 0x090f
         const val SERVICE_GATE_PASSAGE_HISTORY = 0x108f
     }

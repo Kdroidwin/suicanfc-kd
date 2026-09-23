@@ -23,6 +23,7 @@ import com.example.suicanfcreader.model.SuicaCardSummary
 import com.example.suicanfcreader.storage.SecurePreferences
 import com.example.suicanfcreader.widget.BalanceWidgetProvider
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -221,7 +222,7 @@ class TopScreenViewModel(
     val showHistoryIcons: LiveData<Boolean> = _showHistoryIcons
 
     private val _showGatePassageTime =
-        MutableLiveData(preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, true))
+        MutableLiveData(preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, false))
     val showGatePassageTime: LiveData<Boolean> = _showGatePassageTime
 
     private val _demoMode = MutableLiveData(initialDemoMode)
@@ -712,7 +713,7 @@ class TopScreenViewModel(
             put("showBalanceDate", _showBalanceDate.value ?: true)
             put("showHistoryBalances", _showHistoryBalances.value ?: true)
             put("showHistoryIcons", _showHistoryIcons.value ?: true)
-            put("showGatePassageTime", _showGatePassageTime.value ?: true)
+            put("showGatePassageTime", _showGatePassageTime.value ?: false)
             put("demoMode", _demoMode.value ?: false)
             put("features", sanitizeFeatureFlags(JSONObject(preferences.getString(KEY_FEATURE_FLAGS, "{}") ?: "{}")))
         }.toString(2)
@@ -780,7 +781,7 @@ class TopScreenViewModel(
                 .putBoolean(KEY_SHOW_BALANCE_DATE, obj.optBoolean("showBalanceDate", true))
                 .putBoolean(KEY_SHOW_HISTORY_BALANCES, obj.optBoolean("showHistoryBalances", true))
                 .putBoolean(KEY_SHOW_HISTORY_ICONS, obj.optBoolean("showHistoryIcons", true))
-                .putBoolean(KEY_SHOW_GATE_PASSAGE_TIME, obj.optBoolean("showGatePassageTime", true))
+                .putBoolean(KEY_SHOW_GATE_PASSAGE_TIME, obj.optBoolean("showGatePassageTime", false))
                 .putBoolean(KEY_DEMO_MODE, obj.optBoolean("demoMode", false))
                 .putString(KEY_FEATURE_FLAGS, featureFlags.toString())
                 .apply()
@@ -808,7 +809,7 @@ class TopScreenViewModel(
             _showBalanceDate.value = preferences.getBoolean(KEY_SHOW_BALANCE_DATE, true)
             _showHistoryBalances.value = preferences.getBoolean(KEY_SHOW_HISTORY_BALANCES, true)
             _showHistoryIcons.value = preferences.getBoolean(KEY_SHOW_HISTORY_ICONS, true)
-            _showGatePassageTime.value = preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, true)
+            _showGatePassageTime.value = preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, false)
             _demoMode.value = preferences.getBoolean(KEY_DEMO_MODE, false)
             _useSearchIcon.value = preferences.getBoolean(KEY_USE_SEARCH_ICON, true)
             _showLegacySearchBar.value = preferences.getBoolean(KEY_SHOW_LEGACY_SEARCH_BAR, false)
@@ -871,12 +872,18 @@ class TopScreenViewModel(
             try {
                 felica.connect()
                 val readChunks = readHistoryChunks(felica, id, context, cardId)
-                val cardsWithGateTimes = if (preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, true)) {
-                    val gateRecords = runCatching { readGatePassageRecords(felica, id) }
-                        .getOrDefault(emptyList())
-                        .sortedWith(compareByDescending<GatePassageRecord> { it.date }.thenByDescending { it.time })
-                        .toMutableList()
-                    attachGatePassageTimes(readChunks.cards, gateRecords)
+                val cardsWithGateTimes = if (preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, false)) {
+                    try {
+                        val gateRecords = readGatePassageRecords(felica, id)
+                            .sortedWith(compareByDescending<GatePassageRecord> { it.date }.thenByDescending { it.time })
+                            .toMutableList()
+                        attachGatePassageTimes(readChunks.cards, gateRecords)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // The optional gate-log enrichment must never discard successfully read history.
+                        readChunks.cards
+                    }
                 } else {
                     readChunks.cards
                 }
@@ -986,15 +993,23 @@ class TopScreenViewModel(
         availableRecords: MutableList<GatePassageRecord>
     ): List<Card> = cards.map { card ->
         if (card.kind != "JR" && card.kind != "公営/私鉄") return@map card
-        val codes = INTERNAL_STATION_CODES.matchEntire(card.internalCode.orEmpty()) ?: return@map card
+        val codes = SuicaReader.parseGatePassageStationCodes(card.internalCode) ?: return@map card
         val date = card.date ?: return@map card
-        val inLine = codes.groupValues[3].toIntOrNull() ?: return@map card
-        val inStation = codes.groupValues[4].toIntOrNull() ?: return@map card
-        val outLine = codes.groupValues[5].toIntOrNull() ?: return@map card
-        val outStation = codes.groupValues[6].toIntOrNull() ?: return@map card
         card.apply {
-            inGatePassageTime = takeGatePassageTime(availableRecords, date, inLine, inStation, isEntry = true)
-            outGatePassageTime = takeGatePassageTime(availableRecords, date, outLine, outStation, isEntry = false)
+            inGatePassageTime = takeGatePassageTime(
+                availableRecords,
+                date,
+                codes.inLineCode,
+                codes.inStationCode,
+                isEntry = true
+            )
+            outGatePassageTime = takeGatePassageTime(
+                availableRecords,
+                date,
+                codes.outLineCode,
+                codes.outStationCode,
+                isEntry = false
+            )
         }
     }
 
@@ -1551,7 +1566,6 @@ class TopScreenViewModel(
         private const val HISTORY_BLOCK_SIZE = 16
         private const val MAX_HISTORY_RECORDS_PER_RESPONSE = 10
         private const val GATE_PASSAGE_BLOCK_COUNT = 3
-        private val INTERNAL_STATION_CODES = Regex("Area=(\\d+) In=(\\d+)/(\\d+) Out=(\\d+)/(\\d+)")
         private val NFC_ACTIONS = setOf(
             NfcAdapter.ACTION_TAG_DISCOVERED,
             NfcAdapter.ACTION_TECH_DISCOVERED,
