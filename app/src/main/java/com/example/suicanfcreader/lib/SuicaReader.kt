@@ -101,6 +101,8 @@ class SuicaReader {
     private fun isBus(value: Int): Boolean = value == 13 || value == 15 || value == 31 || value == 35
 
     companion object {
+        const val SYSTEM_CODE = 0x0003
+
         private val deviceList = mapOf(
             3 to "精算機", 4 to "携帯型端末", 5 to "車載端末", 7 to "券売機", 8 to "券売機",
             9 to "入金機", 18 to "券売機", 20 to "券売機等", 21 to "券売機等", 22 to "改札機",
@@ -199,7 +201,7 @@ class SuicaReader {
         @JvmStatic
         fun parseGatePassageStationCodes(internalCode: String?): GatePassageStationCodes? {
             val groups = internalCode
-                ?.let { INTERNAL_STATION_CODES.matchEntire(it)?.groupValues }
+                ?.let { INTERNAL_STATION_CODES.find(it)?.groupValues }
                 ?: return null
             return GatePassageStationCodes(
                 inLineCode = groups[1].toIntOrNull() ?: return null,

@@ -108,6 +108,7 @@ fun TopScreen(
     val useModernUi = topScreenViewModel.useModernUi.observeAsState(true)
     val showDeleteButton = topScreenViewModel.showDeleteButton.observeAsState(true)
     val showReadNotice = topScreenViewModel.showReadNotice.observeAsState(true)
+    val scanNotice = topScreenViewModel.scanNotice.observeAsState()
     val showStatisticsButton = topScreenViewModel.showStatisticsButton.observeAsState(true)
     val showInternalCodes = topScreenViewModel.showInternalCodes.observeAsState(false)
     val showHistoryHeader = topScreenViewModel.showHistoryHeader.observeAsState(true)
@@ -135,7 +136,8 @@ fun TopScreen(
         BalanceSummary(
             modifier = modifier,
             summary = selectedSummary,
-            hasFreshData = selectedSummary?.cardId in readCardIds.value,
+            hasFreshData = scanNotice.value == null && selectedSummary?.cardId in readCardIds.value,
+            scanNotice = scanNotice.value,
             balanceColor = balanceColor,
             summaryBackgroundColor = summaryBackgroundColor,
             noticeBackgroundColor = noticeBackgroundColor,
@@ -514,6 +516,7 @@ private fun BalanceSummary(
     modifier: Modifier,
     summary: SuicaCardSummary?,
     hasFreshData: Boolean,
+    scanNotice: String?,
     balanceColor: Color,
     summaryBackgroundColor: Color,
     noticeBackgroundColor: Color,
@@ -599,7 +602,7 @@ private fun BalanceSummary(
                         ) {
                             Text(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                text = if (hasFreshData) "このカードを読み取りました" else "交通系ICカードをかざしてください",
+                                text = scanNotice ?: if (hasFreshData) "このカードを読み取りました" else "交通系ICカードをかざしてください",
                                 color = Color(0xFFE8FFF8),
                                 style = MaterialTheme.typography.bodyMedium
                             )
