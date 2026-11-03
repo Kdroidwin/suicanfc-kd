@@ -25,12 +25,10 @@ data class Merchant(
             val terminalCode = "%02X".format(terminalId)
             val merchantCode = "%04X".format(merchantId)
             return load(context)["$SUICA:$terminalCode:$merchantCode"]
+                ?: getSuicaMerchant(context, terminalId, "%05X".format(merchantId))
         }
 
-        /**
-         * Looks up the newer five-hex-digit merchant code format. Existing SF-history records
-         * expose only the legacy four-digit value, so callers opt into this explicitly.
-         */
+        /** Looks up the five-hex-digit form used by the newer offline merchant tables. */
         fun getSuicaMerchant(context: Context, terminalId: Int, merchantCode: String): Merchant? {
             val normalizedCode = merchantCode.uppercase()
             if (!FIVE_DIGIT_CODE.matches(normalizedCode)) return null
@@ -47,7 +45,12 @@ data class Merchant(
         private fun loadExtended(context: Context): Map<String, Merchant> {
             extendedCache?.let { return it }
             return synchronized(this) {
-                extendedCache ?: read(context, "MerchantCodeV4006.csv").also { extendedCache = it }
+                extendedCache ?: linkedMapOf<String, Merchant>().also { merchants ->
+                    listOf("MerchantCodeV4006.csv", "MerchantCodeV4008.csv").forEach { assetName ->
+                        merchants.putAll(read(context, assetName))
+                    }
+                    extendedCache = merchants
+                }
             }
         }
 

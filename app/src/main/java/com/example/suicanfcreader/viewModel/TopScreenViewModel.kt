@@ -15,8 +15,16 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.suicanfcreader.lib.DoCardReader
 import com.example.suicanfcreader.lib.GatePassageRecord
+import com.example.suicanfcreader.lib.JapaneseEMoneyReader
+import com.example.suicanfcreader.lib.NicePassReader
+import com.example.suicanfcreader.lib.RapicaReader
+import com.example.suicanfcreader.lib.RegionalTransitSystem
+import com.example.suicanfcreader.lib.RegionalTransitSystems
 import com.example.suicanfcreader.lib.SuicaReader
+import com.example.suicanfcreader.lib.UnparsedTransitSystem
+import com.example.suicanfcreader.lib.UnparsedTransitSystems
 import com.example.suicanfcreader.model.AppThemeMode
 import com.example.suicanfcreader.model.Card
 import com.example.suicanfcreader.model.SuicaCardSummary
@@ -54,6 +62,9 @@ class TopScreenViewModel(
 
     private val _isDataRefreshed = MutableLiveData(false)
     val isDataRefreshed: LiveData<Boolean> = _isDataRefreshed
+
+    private val _scanNotice = MutableLiveData<String?>(null)
+    val scanNotice: LiveData<String?> = _scanNotice
 
     private val _readCardIds = MutableLiveData<Set<String>>(emptySet())
     val readCardIds: LiveData<Set<String>> = _readCardIds
@@ -273,6 +284,7 @@ class TopScreenViewModel(
     fun handleNfcIntent(intent: Intent?, context: Context) {
         if (_demoMode.value == true) {
             _nfcData.value = "デモモード中はNFC読み取りを行いません"
+            _scanNotice.value = null
             _isDataRefreshed.value = true
             return
         }
@@ -283,13 +295,16 @@ class TopScreenViewModel(
         val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG) ?: return
         if (tag.id?.size != FELICA_ID_LENGTH || NfcF.get(tag) == null) {
             _nfcData.value = "交通系ICカードとして読み取れませんでした"
+            _scanNotice.value = null
             _isDataRefreshed.value = true
             return
         }
 
         viewModelScope.launch {
+            _scanNotice.value = null
             val data = readTagData(tag, context)
             _nfcData.value = data.rawText
+            _scanNotice.value = data.notice
             _latestCards.value = data.cards
             if (data.cards.isNotEmpty()) {
                 val mergedHistory = mergeHistory(data.cards, loadHistory())
@@ -303,6 +318,7 @@ class TopScreenViewModel(
     }
 
     fun selectCard(cardId: String) {
+        _scanNotice.value = null
         setSelectedCard(cardId)
         refreshDerivedState(activeHistory(), cardId)
     }
@@ -833,6 +849,7 @@ class TopScreenViewModel(
 
     fun clearSelectedCardHistory() {
         if (_demoMode.value == true) return
+        _scanNotice.value = null
         val selectedCardId = _selectedCardId.value ?: return
         val remainingHistory = loadHistory().filterNot { it.resolvedCardId() == selectedCardId }
         saveHistory(remainingHistory)
@@ -846,6 +863,7 @@ class TopScreenViewModel(
 
     fun clearAllHistory() {
         if (_demoMode.value == true) return
+        _scanNotice.value = null
         preferences.edit()
             .remove(KEY_HISTORY)
             .remove(KEY_SELECTED_CARD_ID)
@@ -869,10 +887,126 @@ class TopScreenViewModel(
             val cardId = id.toHexString()
             val felica = NfcF.get(tag)
                 ?: return@withContext ReadResult(cardId, emptyList(), "交通系ICカードとして読み取れませんでした")
+            val systemCode = felica.systemCode
+                .takeIf { it.size == 2 }
+                ?.let { ((it[0].toInt() and 0xff) shl 8) or (it[1].toInt() and 0xff) }
+            val unparsedSystem = UnparsedTransitSystems.fromSystemCode(felica.systemCode)
+            val regionalSystem = RegionalTransitSystems.fromSystemCode(felica.systemCode)
+            val isDoCard = DoCardReader.matchesSystemCode(felica.systemCode)
+            val isRapica = RapicaReader.matchesSystemCode(felica.systemCode)
+            val isNicePass = NicePassReader.matchesSystemCode(felica.systemCode)
+
+            // Keep proprietary systems out of the common Suica 0x090F parser.
+            if (unparsedSystem != null && !isRapica && !isNicePass) {
+                val notice = unparsedTransitNotice(unparsedSystem)
+                runCatching { felica.close() }
+                return@withContext ReadResult(
+                    cardId = cardId,
+                    cards = emptyList(),
+                    rawText = notice,
+                    notice = notice
+                )
+            }
+
+            // Only the common 0x0003 system and explicitly supported profiles may reach
+            // the generic transit decoder. Unknown systems must not produce guessed history.
+            if (!isDoCard && !isRapica && !isNicePass && regionalSystem == null && systemCode != SuicaReader.SYSTEM_CODE &&
+                !JapaneseEMoneyReader.handlesSystemCode(systemCode ?: -1)
+            ) {
+                val notice = if (systemCode == null) {
+                    "FeliCaシステムを判別できませんでした。誤解析を避けるため、履歴を読み込みません"
+                } else {
+                    unparsedTransitNotice(UnparsedTransitSystem(systemCode, "未登録のFeliCaシステム"))
+                }
+                runCatching { felica.close() }
+                return@withContext ReadResult(
+                    cardId = cardId,
+                    cards = emptyList(),
+                    rawText = notice,
+                    notice = notice
+                )
+            }
+
             try {
                 felica.connect()
-                val readChunks = readHistoryChunks(felica, id, context, cardId)
-                val cardsWithGateTimes = if (preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, false)) {
+                if (isNicePass) {
+                    val nicePass = NicePassReader.read(felica, id, cardId, context)
+                    if (nicePass == null) {
+                        val notice = "ナイスパスを検出しましたが、専用履歴データを検証できませんでした"
+                        return@withContext ReadResult(
+                            cardId = cardId,
+                            cards = emptyList(),
+                            rawText = notice,
+                            notice = notice
+                        )
+                    }
+                    return@withContext ReadResult(
+                        cardId = cardId,
+                        cards = nicePass.cards,
+                        rawText = buildRawText(cardId, nicePass.cards, nicePass.rawResponses)
+                    )
+                }
+
+                if (isRapica) {
+                    val rapica = RapicaReader.read(felica, id, cardId, context)
+                    if (rapica == null) {
+                        val notice = "RapiCaを検出しましたが、専用履歴データを検証できませんでした"
+                        return@withContext ReadResult(
+                            cardId = cardId,
+                            cards = emptyList(),
+                            rawText = notice,
+                            notice = notice
+                        )
+                    }
+                    return@withContext ReadResult(
+                        cardId = cardId,
+                        cards = rapica.cards,
+                        rawText = buildRawText(cardId, rapica.cards, rapica.rawResponses)
+                    )
+                }
+
+                if (isDoCard) {
+                    val doCardChunks = readDoCardHistoryChunks(felica, id, cardId)
+                    val cards = withCalculatedAmounts(doCardChunks.cards)
+                    return@withContext ReadResult(
+                        cardId = cardId,
+                        cards = cards,
+                        rawText = buildRawText(cardId, cards, doCardChunks.rawResponses)
+                    )
+                }
+
+                if (JapaneseEMoneyReader.handlesSystemCode(systemCode ?: -1)) {
+                    JapaneseEMoneyReader.read(felica, id, cardId)?.let { eMoney ->
+                        return@withContext ReadResult(
+                            cardId = cardId,
+                            cards = eMoney.cards,
+                            rawText = buildRawText(cardId, eMoney.cards, eMoney.rawResponses)
+                        )
+                    }
+                    val notice = "電子マネー系FeliCa（システムコード %04X）を検出しましたが、対応する履歴形式を確認できませんでした".format(
+                        Locale.US,
+                        systemCode
+                    )
+                    return@withContext ReadResult(
+                        cardId = cardId,
+                        cards = emptyList(),
+                        rawText = notice,
+                        notice = notice
+                    )
+                }
+
+                val readChunks = readHistoryChunks(
+                    felica,
+                    id,
+                    context,
+                    cardId,
+                    regionalSystem,
+                    regionalSystem?.historyServiceCode ?: SuicaReader.SERVICE_TRANSACTION_HISTORY
+                )
+                val cardsWithGateTimes = if (
+                    regionalSystem?.supportsGatePassageHistory != false &&
+                    preferences.getBoolean(KEY_SHOW_GATE_PASSAGE_TIME, false)
+                ) {
                     try {
                         val gateRecords = readGatePassageRecords(felica, id)
                             .sortedWith(compareByDescending<GatePassageRecord> { it.date }.thenByDescending { it.time })
@@ -904,11 +1038,61 @@ class TopScreenViewModel(
             }
         }
 
+    private fun unparsedTransitNotice(system: UnparsedTransitSystem): String =
+        String.format(
+            Locale.US,
+            "%s（システムコード %04X）を検出しました。専用の履歴解析は未対応のため、Suica形式では読み取りません",
+            system.displayName,
+            system.systemCode
+        )
+
+    private fun readDoCardHistoryChunks(
+        felica: NfcF,
+        id: ByteArray,
+        cardId: String
+    ): ReadChunks {
+        val blocks = mutableListOf<ByteArray>()
+        val rawResponses = mutableListOf<ByteArray>()
+
+        for (startBlock in 0 until DoCardReader.MAX_HISTORY_BLOCKS step READ_BLOCK_CHUNK_SIZE) {
+            val requestedBlocks = minOf(READ_BLOCK_CHUNK_SIZE, DoCardReader.MAX_HISTORY_BLOCKS - startBlock)
+            val response = try {
+                felica.transceive(
+                    SuicaReader.readWithoutEncryption(
+                        idm = id,
+                        startBlock = startBlock,
+                        size = requestedBlocks,
+                        serviceCode = DoCardReader.SERVICE_HISTORY
+                    )
+                )
+            } catch (e: Exception) {
+                if (startBlock == 0) throw e
+                break
+            }
+
+            val responseBlocks = DoCardReader.parseHistoryResponse(response, id, requestedBlocks)
+            if (responseBlocks == null) {
+                if (startBlock == 0) throw IllegalStateException("Invalid DoCARD history response")
+                break
+            }
+
+            rawResponses.add(response)
+            blocks.addAll(responseBlocks)
+            if (responseBlocks.isEmpty() || responseBlocks.size < requestedBlocks) break
+        }
+
+        val cards = DoCardReader.parseHistoryBlocks(blocks).onEach { it.cardId = cardId }
+        if (cards.isEmpty()) throw IllegalStateException("No valid DoCARD history records")
+        return ReadChunks(cards = cards.distinctBy { it.number }, rawResponses = rawResponses)
+    }
+
     private fun readHistoryChunks(
         felica: NfcF,
         id: ByteArray,
         context: Context,
-        cardId: String
+        cardId: String,
+        regionalSystem: RegionalTransitSystem?,
+        historyServiceCode: Int
     ): ReadChunks {
         val cards = mutableListOf<Card>()
         val rawResponses = mutableListOf<ByteArray>()
@@ -916,13 +1100,20 @@ class TopScreenViewModel(
         for (startBlock in 0 until MAX_READ_BLOCKS step READ_BLOCK_CHUNK_SIZE) {
             val requestSize = minOf(READ_BLOCK_CHUNK_SIZE, MAX_READ_BLOCKS - startBlock)
             val response = try {
-                felica.transceive(SuicaReader.readWithoutEncryption(id, startBlock, requestSize))
+                felica.transceive(
+                    SuicaReader.readWithoutEncryption(
+                        id,
+                        startBlock,
+                        requestSize,
+                        historyServiceCode
+                    )
+                )
             } catch (e: Exception) {
                 if (startBlock == 0) throw e
                 break
             }
 
-            if (!isValidHistoryResponse(response, requestSize)) {
+            if (!isValidHistoryResponse(response, requestSize, id)) {
                 if (startBlock == 0) {
                     throw IllegalStateException("Invalid FeliCa history response")
                 }
@@ -930,7 +1121,7 @@ class TopScreenViewModel(
             }
 
             rawResponses.add(response)
-            val chunkCards = fromData(response, context, cardId)
+            val chunkCards = fromData(response, context, cardId, regionalSystem)
             cards.addAll(chunkCards)
             if ((response[12].toInt() and 0xff) == 0) break
         }
@@ -941,7 +1132,12 @@ class TopScreenViewModel(
         )
     }
 
-    private fun fromData(data: ByteArray, context: Context, cardId: String): List<Card> {
+    private fun fromData(
+        data: ByteArray,
+        context: Context,
+        cardId: String,
+        regionalSystem: RegionalTransitSystem?
+    ): List<Card> {
         if (data.size < HISTORY_RESPONSE_HEADER_SIZE) return emptyList()
 
         val size: Int = data[12].toInt() and 0xff
@@ -955,14 +1151,23 @@ class TopScreenViewModel(
             if (!felica.hasPlausibleHistoryValues()) continue
             val card: Card = Card.getCard(context, felica)
             card.cardId = cardId
+            if (regionalSystem != null) {
+                card.internalCode = RegionalTransitSystems.marker(regionalSystem, card.internalCode)
+            }
             cards.add(card)
         }
         return cards
     }
 
-    private fun isValidHistoryResponse(response: ByteArray, requestedBlocks: Int): Boolean {
+    private fun isValidHistoryResponse(
+        response: ByteArray,
+        requestedBlocks: Int,
+        expectedIdm: ByteArray
+    ): Boolean {
+        if (expectedIdm.size != FELICA_ID_LENGTH) return false
         if (response.size < HISTORY_RESPONSE_HEADER_SIZE) return false
         if ((response[0].toInt() and 0xff) != response.size || (response[1].toInt() and 0xff) != 0x07) return false
+        if (!response.copyOfRange(2, 10).contentEquals(expectedIdm)) return false
         if (response[10].toInt() != 0 || response[11].toInt() != 0) return false
         val blockCount = response[12].toInt() and 0xff
         if (blockCount > requestedBlocks || blockCount > MAX_HISTORY_RECORDS_PER_RESPONSE) return false
@@ -979,7 +1184,7 @@ class TopScreenViewModel(
                 serviceCode = SuicaReader.SERVICE_GATE_PASSAGE_HISTORY
             )
         )
-        if (!isValidHistoryResponse(response, requestedBlocks)) return emptyList()
+        if (!isValidHistoryResponse(response, requestedBlocks, id)) return emptyList()
 
         val blockCount = response[12].toInt() and 0xff
         return (0 until blockCount).mapNotNull { index ->
@@ -1029,6 +1234,9 @@ class TopScreenViewModel(
 
     private fun withCalculatedAmounts(cards: List<Card>): List<Card> {
         return cards.mapIndexed { index, card ->
+            // E-money parsers read an explicit signed transaction amount. Preserve it;
+            // transit cards continue using the balance-difference calculation below.
+            if (card.internalCode?.startsWith("JapaneseEMoney=") == true) return@mapIndexed card
             val current = card.balance?.toIntOrNull()
             val previous = cards.getOrNull(index + 1)?.balance?.toIntOrNull()
             if (current != null && previous != null) {
@@ -1080,7 +1288,11 @@ class TopScreenViewModel(
         listOf(resolvedCardId(), number ?: date.orEmpty()).joinToString("|")
 
     private fun Card.withUserEditsFrom(saved: Card): Card {
+        val isMatchingDoCardRecord =
+            internalCode?.startsWith("DoCARD System=8DB6") == true &&
+                saved.internalCode?.startsWith("DoCARD System=8DB6") == true
         val merged = copy(
+            date = if (isMatchingDoCardRecord) saved.date?.takeIf { it.isNotBlank() } ?: date else date,
             memo = saved.memo ?: memo,
             tags = saved.tags ?: tags,
             inGatePassageTime = inGatePassageTime ?: saved.inGatePassageTime,
@@ -1447,6 +1659,19 @@ class TopScreenViewModel(
     }
 
     private fun List<Card>.inferTransitBrand(): String {
+        firstNotNullOfOrNull { RegionalTransitSystems.fromMarker(it.internalCode)?.displayName }
+            ?.let { return it }
+        firstNotNullOfOrNull { card ->
+            when {
+                card.internalCode?.startsWith("JapaneseEMoney=Edy") == true -> "楽天Edy"
+                card.internalCode?.startsWith("JapaneseEMoney=Nanaco") == true -> "nanaco"
+                card.internalCode?.startsWith("JapaneseEMoney=Waon") == true -> "WAON"
+                else -> null
+            }
+        }?.let { return it }
+        if (any { it.internalCode?.startsWith("DoCARD System=8DB6") == true }) return "DoCARD"
+        if (any { it.internalCode?.startsWith("Rapica System=8194") == true }) return "Rapica"
+        if (any { it.internalCode?.startsWith("NicePass System=040F") == true }) return "ナイスパス"
         val text = flatMap { card ->
             listOf(card.inCompany, card.outCompany, card.inLine, card.outLine)
         }.joinToString(" ")
@@ -1490,7 +1715,8 @@ class TopScreenViewModel(
     private data class ReadResult(
         val cardId: String,
         val cards: List<Card>,
-        val rawText: String
+        val rawText: String,
+        val notice: String? = null
     )
 
     private data class ReadChunks(
