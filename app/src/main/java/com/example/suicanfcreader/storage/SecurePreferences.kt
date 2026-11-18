@@ -1,9 +1,14 @@
+@file:Suppress("DEPRECATION")
+
 package com.example.suicanfcreader.storage
 
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+
+class SecurePreferencesUnavailableException(message: String, cause: Throwable? = null) :
+    IllegalStateException(message, cause)
 
 object SecurePreferences {
     private const val LEGACY_NAME = "suica_reader_history"
@@ -12,16 +17,24 @@ object SecurePreferences {
 
     fun open(context: Context): SharedPreferences {
         val appContext = context.applicationContext
-        val masterKey = MasterKey.Builder(appContext)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        val encrypted = EncryptedSharedPreferences.create(
-            appContext,
-            SECURE_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
+        val encrypted = try {
+            val masterKey = MasterKey.Builder(appContext)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                appContext,
+                SECURE_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (error: Exception) {
+            // Fail closed: never fall back to unencrypted SharedPreferences.
+            throw SecurePreferencesUnavailableException(
+                "Encrypted preferences are unavailable; refusing plaintext fallback",
+                error
+            )
+        }
         migrateLegacyPreferences(appContext, encrypted)
         return encrypted
     }

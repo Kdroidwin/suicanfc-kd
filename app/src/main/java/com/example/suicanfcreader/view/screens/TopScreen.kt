@@ -77,6 +77,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import com.example.suicanfcreader.model.SuicaCardSummary
 import com.example.suicanfcreader.security.SensitiveClipboard
+import com.example.suicanfcreader.util.BackupFileGuard
 import com.example.suicanfcreader.viewModel.TopScreenViewModel
 import java.util.Locale
 import com.example.suicanfcreader.model.Card as TransitHistoryRecord
@@ -2431,22 +2432,43 @@ private fun readBackupFile(context: android.content.Context, uri: Uri?): String?
     val sourceUri = requireNotNull(uri)
     require(sourceUri.scheme == ContentResolver.SCHEME_CONTENT)
     val mimeType = context.contentResolver.getType(sourceUri)?.lowercase(Locale.ROOT)
-    require(mimeType == "application/json" || mimeType == "text/json" || mimeType == "text/plain")
+    require(
+        mimeType == "application/json" ||
+            mimeType == "text/json" ||
+            mimeType == "text/plain"
+    )
     val length = context.contentResolver.openAssetFileDescriptor(sourceUri, "r")?.use { it.length } ?: -1L
     require(length < 0 || length <= MAX_BACKUP_FILE_BYTES)
-    context.contentResolver.openInputStream(sourceUri)?.bufferedReader(Charsets.UTF_8)?.use { reader ->
-        buildString {
-            val buffer = CharArray(8_192)
-            var totalChars = 0
-            while (totalChars <= MAX_BACKUP_FILE_BYTES) {
-                val read = reader.read(buffer)
-                if (read < 0) break
-                totalChars += read
-                require(totalChars <= MAX_BACKUP_FILE_BYTES) { "Backup is too large" }
-                append(buffer, 0, read)
+    val stream = context.contentResolver.openInputStream(sourceUri) ?: error("Could not open backup source")
+    stream.use { input ->
+        val buffered = input.buffered()
+        buffered.mark(ARCHIVE_HEADER_BYTES)
+        val header = ByteArray(ARCHIVE_HEADER_BYTES)
+        var headerLength = 0
+        while (headerLength < header.size) {
+            val read = buffered.read(header, headerLength, header.size - headerLength)
+            if (read < 0) break
+            headerLength += read
+        }
+        buffered.reset()
+        require(
+            headerLength <= 0 ||
+                !BackupFileGuard.isArchive(header.copyOf(headerLength.coerceAtLeast(0)))
+        ) { "Archive files are not supported" }
+        buffered.bufferedReader(Charsets.UTF_8).use { reader ->
+            buildString {
+                val buffer = CharArray(8_192)
+                var totalChars = 0
+                while (totalChars <= MAX_BACKUP_FILE_BYTES) {
+                    val read = reader.read(buffer)
+                    if (read < 0) break
+                    totalChars += read
+                    require(totalChars <= MAX_BACKUP_FILE_BYTES) { "Backup is too large" }
+                    append(buffer, 0, read)
+                }
             }
         }
-    } ?: error("Could not open backup source")
+    }
 }.getOrNull()
 
 private fun isSafeImageUri(context: android.content.Context, uri: Uri): Boolean = runCatching {
@@ -2465,6 +2487,7 @@ private fun isSafeImageUri(context: android.content.Context, uri: Uri): Boolean 
 
 private const val MAX_BACKGROUND_IMAGE_BYTES = 20L * 1024L * 1024L
 private const val MAX_BACKUP_FILE_BYTES = 2 * 1024 * 1024
+private const val ARCHIVE_HEADER_BYTES = 8
 private const val MAX_BACKGROUND_IMAGE_DIMENSION = 8_192
 private const val MAX_BACKGROUND_IMAGE_PIXELS = 24_000_000L
 
