@@ -29,6 +29,7 @@ import com.example.suicanfcreader.model.AppThemeMode
 import com.example.suicanfcreader.model.Card
 import com.example.suicanfcreader.model.SuicaCardSummary
 import com.example.suicanfcreader.storage.SecurePreferences
+import com.example.suicanfcreader.util.CsvEscaper
 import com.example.suicanfcreader.widget.BalanceWidgetProvider
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -876,6 +877,7 @@ class TopScreenViewModel(
         _readCardIds.value = emptySet()
         _nfcData.value = ""
         _isDataRefreshed.value = false
+        BalanceWidgetProvider.requestUpdate(appContext)
     }
 
     private suspend fun readTagData(tag: Tag, context: Context): ReadResult =
@@ -1694,10 +1696,7 @@ class TopScreenViewModel(
         }
     }
 
-    private fun String?.csvEscape(): String {
-        val raw = this.orEmpty()
-        return "\"${raw.replace("\"", "\"\"")}\""
-    }
+    private fun String?.csvEscape(): String = CsvEscaper.escape(this)
 
     private fun List<String?>.readableJoin(): String =
         filterNot { it.isNullOrBlank() }.joinToString(" / ").ifBlank { "-" }

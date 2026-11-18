@@ -70,15 +70,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.ClipboardManager
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import com.example.suicanfcreader.model.SuicaCardSummary
+import com.example.suicanfcreader.security.SensitiveClipboard
 import com.example.suicanfcreader.viewModel.TopScreenViewModel
 import java.util.Locale
 import com.example.suicanfcreader.model.Card as TransitHistoryRecord
@@ -118,7 +116,7 @@ fun TopScreen(
     val showGatePassageTime = topScreenViewModel.showGatePassageTime.observeAsState(false)
     val transparentContentSurfaces = topScreenViewModel.useTransparentContentSurfaces.observeAsState(false)
     val readCardIds = topScreenViewModel.readCardIds.observeAsState(emptySet())
-    val clipboardManager: ClipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     val selectedSummary = summaries.value.firstOrNull { it.cardId == selectedCardId.value }
     val balanceColor = balanceColorHex.value.toComposeColor() ?: MaterialTheme.colorScheme.primary
     val summaryBackgroundColor = summaryBackgroundColorHex.value.toComposeColor() ?: Color(0xFF103F3A)
@@ -149,9 +147,9 @@ fun TopScreen(
             showBalanceDate = showBalanceDate.value,
             showReadNotice = showReadNotice.value,
             showDeleteButton = showDeleteButton.value,
-            onCopyJson = { clipboardManager.setText(AnnotatedString(topScreenViewModel.exportSelectedJson())) },
-            onCopyCsv = { clipboardManager.setText(AnnotatedString(topScreenViewModel.exportSelectedCsv())) },
-            onCopyNotion = { clipboardManager.setText(AnnotatedString(topScreenViewModel.exportSelectedNotionMarkdown())) },
+            onCopyJson = { SensitiveClipboard.copy(context, topScreenViewModel.exportSelectedJson()) },
+            onCopyCsv = { SensitiveClipboard.copy(context, topScreenViewModel.exportSelectedCsv()) },
+            onCopyNotion = { SensitiveClipboard.copy(context, topScreenViewModel.exportSelectedNotionMarkdown()) },
             onRename = { selectedSummary?.let { aliasDialogCard = it } },
             onClearSelected = topScreenViewModel::clearSelectedCardHistory,
             canCopy = selectedSummary != null,
@@ -1613,7 +1611,7 @@ fun StatsScreen(
     viewModel: TopScreenViewModel,
     onBack: () -> Unit
 ) {
-    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1627,7 +1625,7 @@ fun StatsScreen(
             color = MaterialTheme.colorScheme.onBackground,
             style = MaterialTheme.typography.bodyLarge
         )
-        TextButton(onClick = { clipboardManager.setText(AnnotatedString(viewModel.statsText())) }) {
+        TextButton(onClick = { SensitiveClipboard.copy(context, viewModel.statsText()) }) {
             Text("統計をコピー")
         }
     }
