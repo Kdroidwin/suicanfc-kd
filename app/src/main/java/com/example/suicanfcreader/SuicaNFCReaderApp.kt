@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
@@ -49,6 +50,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import com.example.suicanfcreader.navigation.Screen
 import com.example.suicanfcreader.model.AppThemeMode
 import com.example.suicanfcreader.navigation.SuicaNFCReaderNavigation
+import com.example.suicanfcreader.ui.LocalMaskSensitiveValues
 import com.example.suicanfcreader.ui.theme.SuicaNFCReaderTheme
 import com.example.suicanfcreader.util.BoundedImageDecoder
 import com.example.suicanfcreader.viewModel.TopScreenViewModel
@@ -57,6 +59,7 @@ import com.example.suicanfcreader.viewModel.TopScreenViewModel
 @Composable
 fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
     val themeMode = viewModel.themeMode.observeAsState(AppThemeMode.AMOLED)
+    val maskSensitiveValues = viewModel.maskSensitiveValues.observeAsState(false)
     val accentColorHex = viewModel.accentColorHex.observeAsState("#8AD7C8")
     val appTitle = viewModel.appTitle.observeAsState("SuicaNFC KD")
     val useSearchIcon = viewModel.useSearchIcon.observeAsState(true)
@@ -70,6 +73,7 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
     val context = LocalContext.current.applicationContext
     val themeImage = rememberImageBitmap(context, themeBackgroundImageUri)
 
+    CompositionLocalProvider(LocalMaskSensitiveValues provides maskSensitiveValues.value) {
     SuicaNFCReaderTheme(themeMode = themeMode.value, accentColorHex = accentColorHex.value) {
         val navController = rememberNavController()
         val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
@@ -148,6 +152,7 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
             )
         }
         }
+    }
     }
 }
 

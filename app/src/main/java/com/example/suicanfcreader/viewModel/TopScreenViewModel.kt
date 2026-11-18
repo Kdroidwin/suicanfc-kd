@@ -28,7 +28,9 @@ import com.example.suicanfcreader.lib.UnparsedTransitSystems
 import com.example.suicanfcreader.model.AppThemeMode
 import com.example.suicanfcreader.model.Card
 import com.example.suicanfcreader.model.SuicaCardSummary
+import com.example.suicanfcreader.security.NfcIntentValidator
 import com.example.suicanfcreader.storage.SecurePreferences
+import com.example.suicanfcreader.util.BackupCrypto
 import com.example.suicanfcreader.util.CsvEscaper
 import com.example.suicanfcreader.widget.BalanceWidgetProvider
 import java.util.Locale
@@ -106,6 +108,10 @@ class TopScreenViewModel(
     private val _widgetPrivacyMode =
         MutableLiveData(preferences.getBoolean(KEY_WIDGET_PRIVACY_MODE, true))
     val widgetPrivacyMode: LiveData<Boolean> = _widgetPrivacyMode
+
+    private val _maskSensitiveValues =
+        MutableLiveData(preferences.getBoolean(KEY_MASK_SENSITIVE_VALUES, false))
+    val maskSensitiveValues: LiveData<Boolean> = _maskSensitiveValues
 
     private val _useTransparentContentSurfaces =
         MutableLiveData(preferences.getBoolean(KEY_TRANSPARENT_CONTENT_SURFACES, false))
@@ -289,12 +295,8 @@ class TopScreenViewModel(
             _isDataRefreshed.value = true
             return
         }
-        val action = intent?.action ?: return
-        if (action !in NFC_ACTIONS) return
-
-        @Suppress("DEPRECATION")
-        val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG) ?: return
-        if (tag.id?.size != FELICA_ID_LENGTH || NfcF.get(tag) == null) {
+        val tag = NfcIntentValidator.validate(context, intent)
+        if (tag == null) {
             _nfcData.value = "交通系ICカードとして読み取れませんでした"
             _scanNotice.value = null
             _isDataRefreshed.value = true
@@ -350,6 +352,11 @@ class TopScreenViewModel(
         preferences.edit().putBoolean(KEY_WIDGET_PRIVACY_MODE, enabled).apply()
         _widgetPrivacyMode.value = enabled
         BalanceWidgetProvider.requestUpdate(appContext)
+    }
+
+    fun setMaskSensitiveValues(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_MASK_SENSITIVE_VALUES, enabled).apply()
+        _maskSensitiveValues.value = enabled
     }
 
     fun setUseTransparentContentSurfaces(enabled: Boolean) {
@@ -651,7 +658,7 @@ class TopScreenViewModel(
         return "$header\n$body"
     }
 
-    fun statsText(): String {
+    fun statsText(maskSensitive: Boolean = _maskSensitiveValues.value ?: false): String {
         val rows = filterHistory(activeHistory(), _selectedCardId.value, "")
         val spending = rows.sumOf { card ->
             val amount = card.amount?.toIntOrNull() ?: 0
@@ -672,11 +679,14 @@ class TopScreenViewModel(
                     val amount = card.amount?.toIntOrNull() ?: 0
                     if (amount < 0) -amount else 0
                 }
-                "$month  支出 ${monthSpending}円 / 利用 ${records.size}件"
+                val amountText = if (maskSensitive) "••••" else "${monthSpending}円"
+                "$month  支出 $amountText / 利用 ${records.size}件"
             }
+        val spendingText = if (maskSensitive) "••••" else "${spending}円"
+        val chargesText = if (maskSensitive) "••••" else "${charges}円"
         return buildString {
-            appendLine("総支出: ${spending}円")
-            appendLine("総チャージ: ${charges}円")
+            appendLine("総支出: $spendingText")
+            appendLine("総チャージ: $chargesText")
             appendLine("利用回数: ${rows.size}件")
             appendLine("移動回数: ${movements}回")
             if (byMonth.isNotBlank()) {
@@ -686,16 +696,20 @@ class TopScreenViewModel(
         }.trim()
     }
 
-    fun exportBackupJson(): String {
-        return JSONObject().apply {
+    fun exportBackupJson(password: String): String {
+        val payload = JSONObject().apply {
             put("schema", BACKUP_SCHEMA_VERSION)
-            put("history", JSONArray(preferences.getString(KEY_HISTORY, "[]") ?: "[]"))
+            put(
+                "history",
+                sanitizeBackupHistory(JSONArray(preferences.getString(KEY_HISTORY, "[]") ?: "[]"))
+            )
             put("selectedCardId", _selectedCardId.value)
             put("cardAliases", sanitizeAliases(JSONObject(preferences.getString(KEY_CARD_ALIASES, "{}") ?: "{}")))
             put("themeMode", _themeMode.value?.name ?: AppThemeMode.AMOLED.name)
             put("themeBackgroundImageUri", trustedPersistedImageUriOrNull(_themeBackgroundImageUri.value))
             put("themeBackgroundDimAmount", _themeBackgroundDimAmount.value ?: DEFAULT_THEME_BACKGROUND_DIM_AMOUNT)
             put("widgetPrivacyMode", _widgetPrivacyMode.value ?: true)
+            put("maskSensitiveValues", _maskSensitiveValues.value ?: false)
             put("transparentContentSurfaces", _useTransparentContentSurfaces.value ?: false)
             put("bottomTabCardIconUri", trustedPersistedImageUriOrNull(_bottomTabIconUris.value?.get("card")))
             put("bottomTabStatsIconUri", trustedPersistedImageUriOrNull(_bottomTabIconUris.value?.get("stats")))
@@ -734,16 +748,42 @@ class TopScreenViewModel(
             put("demoMode", _demoMode.value ?: false)
             put("features", sanitizeFeatureFlags(JSONObject(preferences.getString(KEY_FEATURE_FLAGS, "{}") ?: "{}")))
         }.toString(2)
+        val passwordChars = password.toCharArray()
+        return try {
+            BackupCrypto.encrypt(payload, passwordChars)
+        } finally {
+            passwordChars.fill('\u0000')
+        }
     }
 
-    fun importBackupJson(rawJson: String): Boolean {
+    fun importBackupJson(rawJson: String, password: String): Boolean {
+        val passwordChars = password.toCharArray()
+        return try {
+            require(rawJson.length <= MAX_ENCRYPTED_BACKUP_LENGTH) { "Backup is too large" }
+            require(BackupCrypto.isEncryptedBackup(rawJson)) { "Plaintext backups are not supported" }
+            applyBackupJson(BackupCrypto.decrypt(rawJson, passwordChars))
+        } catch (_: Exception) {
+            false
+        } finally {
+            passwordChars.fill('\u0000')
+        }
+    }
+
+    private fun applyBackupJson(rawJson: String): Boolean {
         return runCatching {
             require(rawJson.length <= MAX_BACKUP_JSON_LENGTH) { "Backup is too large" }
             val obj = JSONObject(rawJson)
             require(obj.optInt("schema", 1) in 1..BACKUP_SCHEMA_VERSION) { "Unsupported backup schema" }
-            val history = obj.optJSONArray("history") ?: JSONArray()
-            require(history.length() <= MAX_HISTORY_ITEMS) { "Too many history records" }
-            val selectedCardId = obj.optString("selectedCardId").takeIf { CARD_ID_PATTERN.matches(it) }
+            val history = sanitizeBackupHistory(obj.optJSONArray("history"))
+            val historyCardIds = buildSet {
+                for (index in 0 until history.length()) {
+                    val card = history.optJSONObject(index) ?: continue
+                    add(card.optString("cardId").takeIf { CARD_ID_PATTERN.matches(it) } ?: LEGACY_CARD_ID)
+                }
+            }
+            val selectedCardId = obj.optString("selectedCardId")
+                .takeIf { CARD_ID_PATTERN.matches(it) && it in historyCardIds }
+                ?: historyCardIds.firstOrNull()
             val aliases = sanitizeAliases(obj.optJSONObject("cardAliases"))
             val summaryImageUri = trustedPersistedImageUriOrNull(
                 obj.optString("summaryBackgroundImageUri").ifBlank { null }
@@ -759,7 +799,8 @@ class TopScreenViewModel(
             val settingsTabIconUri = trustedPersistedImageUriOrNull(obj.optString("bottomTabSettingsIconUri").ifBlank { null })
             val cardBackgrounds = sanitizeCardBackgroundImages(obj.optJSONObject("cardBackgroundImages"))
             val featureFlags = sanitizeFeatureFlags(obj.optJSONObject("features"))
-            preferences.edit()
+            val previousValues = preferences.all
+            val committed = preferences.edit()
                 .putString(KEY_HISTORY, history.toString())
                 .putString(KEY_SELECTED_CARD_ID, selectedCardId)
                 .putString(KEY_CARD_ALIASES, aliases.toString())
@@ -767,6 +808,7 @@ class TopScreenViewModel(
                 .putString(KEY_THEME_BACKGROUND_IMAGE_URI, themeImageUri)
                 .putInt(KEY_THEME_BACKGROUND_DIM_AMOUNT, obj.optInt("themeBackgroundDimAmount", DEFAULT_THEME_BACKGROUND_DIM_AMOUNT).coerceIn(0, 100))
                 .putBoolean(KEY_WIDGET_PRIVACY_MODE, obj.optBoolean("widgetPrivacyMode", true))
+                .putBoolean(KEY_MASK_SENSITIVE_VALUES, obj.optBoolean("maskSensitiveValues", false))
                 .putBoolean(KEY_TRANSPARENT_CONTENT_SURFACES, obj.optBoolean("transparentContentSurfaces", false))
                 .putString(KEY_BOTTOM_TAB_CARD_ICON_URI, cardTabIconUri)
                 .putString(KEY_BOTTOM_TAB_STATS_ICON_URI, statsTabIconUri)
@@ -801,11 +843,19 @@ class TopScreenViewModel(
                 .putBoolean(KEY_SHOW_GATE_PASSAGE_TIME, obj.optBoolean("showGatePassageTime", false))
                 .putBoolean(KEY_DEMO_MODE, obj.optBoolean("demoMode", false))
                 .putString(KEY_FEATURE_FLAGS, featureFlags.toString())
-                .apply()
+                .commit()
+            if (!committed) {
+                // Best-effort rollback: SharedPreferences has no multi-key transaction API.
+                runCatching {
+                    preferences.edit().clear().putSnapshot(previousValues).commit()
+                }
+                error("Backup commit failed")
+            }
             _themeMode.value = AppThemeMode.fromName(preferences.getString(KEY_THEME_MODE, null))
             _themeBackgroundImageUri.value = trustedPersistedImageUriOrNull(preferences.getString(KEY_THEME_BACKGROUND_IMAGE_URI, null))
             _themeBackgroundDimAmount.value = preferences.getInt(KEY_THEME_BACKGROUND_DIM_AMOUNT, DEFAULT_THEME_BACKGROUND_DIM_AMOUNT).coerceIn(0, 100)
             _widgetPrivacyMode.value = preferences.getBoolean(KEY_WIDGET_PRIVACY_MODE, true)
+            _maskSensitiveValues.value = preferences.getBoolean(KEY_MASK_SENSITIVE_VALUES, false)
             _useTransparentContentSurfaces.value = preferences.getBoolean(KEY_TRANSPARENT_CONTENT_SURFACES, false)
             _bottomTabIconUris.value = loadBottomTabIconUris()
             _appTitle.value = preferences.getString(KEY_APP_TITLE, DEFAULT_APP_TITLE) ?: DEFAULT_APP_TITLE
@@ -843,9 +893,100 @@ class TopScreenViewModel(
                 preferences.getString(KEY_SUMMARY_BACKGROUND_IMAGE_URI, null)
             )
             _cardBackgroundImageUris.value = loadCardBackgroundImageUris()
-            refreshDerivedState(activeHistory(), _selectedCardId.value)
+            refreshDerivedState(activeHistory(), selectedCardId)
             BalanceWidgetProvider.requestUpdate(appContext)
-        }.isSuccess
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun sanitizeBackupHistory(source: JSONArray?): JSONArray {
+        if (source == null) return JSONArray()
+        require(source.length() <= MAX_HISTORY_ITEMS) { "Too many history records" }
+        val sanitized = JSONArray()
+        for (index in 0 until source.length()) {
+            val item = source.optJSONObject(index) ?: error("Invalid history record")
+            sanitized.put(item.toCard().sanitizeForBackup().toJson())
+        }
+        return sanitized
+    }
+
+    private fun Card.sanitizeForBackup(): Card = copy(
+        cardId = cardId?.let {
+            require(CARD_ID_PATTERN.matches(it)) { "Invalid card id" }
+            it
+        },
+        date = date?.let {
+            require(DATE_PATTERN.matches(it)) { "Invalid date" }
+            it
+        },
+        inGatePassageTime = inGatePassageTime?.let {
+            require(TIME_PATTERN.matches(it)) { "Invalid gate time" }
+            it
+        },
+        outGatePassageTime = outGatePassageTime?.let {
+            require(TIME_PATTERN.matches(it)) { "Invalid gate time" }
+            it
+        },
+        number = number?.let {
+            require(NUMBER_PATTERN.matches(it)) { "Invalid record number" }
+            it
+        },
+        payment = sanitizeBackupNumeric(payment),
+        amount = sanitizeBackupNumeric(amount),
+        balance = sanitizeBackupNumeric(balance),
+        kind = sanitizeBackupText(kind, MAX_BACKUP_FIELD_LENGTH),
+        device = sanitizeBackupText(device, MAX_BACKUP_FIELD_LENGTH),
+        action = sanitizeBackupText(action, MAX_BACKUP_FIELD_LENGTH),
+        inLine = sanitizeBackupText(inLine, MAX_BACKUP_PLACE_LENGTH),
+        inStation = sanitizeBackupText(inStation, MAX_BACKUP_PLACE_LENGTH),
+        outLine = sanitizeBackupText(outLine, MAX_BACKUP_PLACE_LENGTH),
+        outStation = sanitizeBackupText(outStation, MAX_BACKUP_PLACE_LENGTH),
+        inCompany = sanitizeBackupText(inCompany, MAX_BACKUP_PLACE_LENGTH),
+        outCompany = sanitizeBackupText(outCompany, MAX_BACKUP_PLACE_LENGTH),
+        memo = sanitizeBackupText(memo, MAX_BACKUP_MEMO_LENGTH, allowNewlines = true),
+        tags = sanitizeBackupText(tags, MAX_BACKUP_TAGS_LENGTH),
+        internalCode = sanitizeBackupText(internalCode, MAX_BACKUP_INTERNAL_CODE_LENGTH)
+    )
+
+    private fun sanitizeBackupNumeric(value: String?): String? {
+        val raw = value?.trim() ?: return null
+        if (raw.isEmpty()) return null
+        require(AMOUNT_PATTERN.matches(raw)) { "Invalid numeric field" }
+        return raw
+    }
+
+    private fun sanitizeBackupText(
+        value: String?,
+        maxLength: Int,
+        allowNewlines: Boolean = false
+    ): String? {
+        val raw = value?.trim() ?: return null
+        if (raw.isEmpty()) return null
+        val sanitized = buildString {
+            raw.forEach { character ->
+                when {
+                    character == '\n' && allowNewlines -> append(character)
+                    character == '\t' && allowNewlines -> append(character)
+                    !character.isISOControl() -> append(character)
+                }
+            }
+        }.trim()
+        return sanitized.takeIf { it.isNotEmpty() }?.take(maxLength)
+    }
+
+    private fun SharedPreferences.Editor.putSnapshot(values: Map<String, *>): SharedPreferences.Editor {
+        values.forEach { (key, value) ->
+            when (value) {
+                is String -> putString(key, value)
+                is Int -> putInt(key, value)
+                is Long -> putLong(key, value)
+                is Float -> putFloat(key, value)
+                is Boolean -> putBoolean(key, value)
+                is Set<*> -> putStringSet(key, value.filterIsInstance<String>().toSet())
+                else -> remove(key)
+            }
+        }
+        return this
     }
 
     fun clearSelectedCardHistory() {
@@ -1730,6 +1871,7 @@ class TopScreenViewModel(
         private const val KEY_THEME_BACKGROUND_IMAGE_URI = "theme_background_image_uri"
         private const val KEY_THEME_BACKGROUND_DIM_AMOUNT = "theme_background_dim_amount"
         private const val KEY_WIDGET_PRIVACY_MODE = "widget_privacy_mode"
+        private const val KEY_MASK_SENSITIVE_VALUES = "mask_sensitive_values"
         private const val KEY_TRANSPARENT_CONTENT_SURFACES = "transparent_content_surfaces"
         private const val KEY_BOTTOM_TAB_CARD_ICON_URI = "bottom_tab_card_icon_uri"
         private const val KEY_BOTTOM_TAB_STATS_ICON_URI = "bottom_tab_stats_icon_uri"
@@ -1785,17 +1927,22 @@ class TopScreenViewModel(
         private const val MAX_READ_BLOCKS = 50
         private const val MAX_HISTORY_ITEMS = 300
         private const val MAX_BACKUP_JSON_LENGTH = 2 * 1024 * 1024
+        private const val MAX_ENCRYPTED_BACKUP_LENGTH = 4 * 1024 * 1024
+        private const val MAX_BACKUP_FIELD_LENGTH = 120
+        private const val MAX_BACKUP_PLACE_LENGTH = 200
+        private const val MAX_BACKUP_MEMO_LENGTH = 1000
+        private const val MAX_BACKUP_TAGS_LENGTH = 500
+        private const val MAX_BACKUP_INTERNAL_CODE_LENGTH = 300
         private val COLOR_PATTERN = Regex("^#[0-9a-fA-F]{6}$")
+        private val DATE_PATTERN = Regex("^\\d{4}/\\d{2}/\\d{2}$")
+        private val TIME_PATTERN = Regex("^\\d{2}:\\d{2}$")
+        private val NUMBER_PATTERN = Regex("^[0-9]{1,12}$")
+        private val AMOUNT_PATTERN = Regex("^-?[0-9][0-9,]{0,19}$")
         private const val FELICA_ID_LENGTH = 8
         private const val HISTORY_RESPONSE_HEADER_SIZE = 13
         private const val HISTORY_BLOCK_SIZE = 16
         private const val MAX_HISTORY_RECORDS_PER_RESPONSE = 10
         private const val GATE_PASSAGE_BLOCK_COUNT = 3
-        private val NFC_ACTIONS = setOf(
-            NfcAdapter.ACTION_TAG_DISCOVERED,
-            NfcAdapter.ACTION_TECH_DISCOVERED,
-            NfcAdapter.ACTION_NDEF_DISCOVERED
-        )
     }
 }
 
