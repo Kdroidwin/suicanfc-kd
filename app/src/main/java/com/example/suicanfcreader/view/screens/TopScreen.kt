@@ -72,11 +72,15 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import com.example.suicanfcreader.model.SuicaCardSummary
 import com.example.suicanfcreader.security.SensitiveClipboard
+import com.example.suicanfcreader.ui.LocalMaskSensitiveValues
+import com.example.suicanfcreader.util.BackupCrypto
 import com.example.suicanfcreader.util.BackupFileGuard
 import com.example.suicanfcreader.viewModel.TopScreenViewModel
 import java.util.Locale
@@ -116,6 +120,7 @@ fun TopScreen(
     val showHistoryIcons = topScreenViewModel.showHistoryIcons.observeAsState(true)
     val showGatePassageTime = topScreenViewModel.showGatePassageTime.observeAsState(false)
     val transparentContentSurfaces = topScreenViewModel.useTransparentContentSurfaces.observeAsState(false)
+    val maskSensitiveValues = topScreenViewModel.maskSensitiveValues.observeAsState(false)
     val readCardIds = topScreenViewModel.readCardIds.observeAsState(emptySet())
     val context = LocalContext.current
     val selectedSummary = summaries.value.firstOrNull { it.cardId == selectedCardId.value }
@@ -148,9 +153,27 @@ fun TopScreen(
             showBalanceDate = showBalanceDate.value,
             showReadNotice = showReadNotice.value,
             showDeleteButton = showDeleteButton.value,
-            onCopyJson = { SensitiveClipboard.copy(context, topScreenViewModel.exportSelectedJson()) },
-            onCopyCsv = { SensitiveClipboard.copy(context, topScreenViewModel.exportSelectedCsv()) },
-            onCopyNotion = { SensitiveClipboard.copy(context, topScreenViewModel.exportSelectedNotionMarkdown()) },
+            onCopyJson = {
+                SensitiveClipboard.copy(
+                    context,
+                    topScreenViewModel.exportSelectedJson(),
+                    maskSensitiveValues.value
+                )
+            },
+            onCopyCsv = {
+                SensitiveClipboard.copy(
+                    context,
+                    topScreenViewModel.exportSelectedCsv(),
+                    maskSensitiveValues.value
+                )
+            },
+            onCopyNotion = {
+                SensitiveClipboard.copy(
+                    context,
+                    topScreenViewModel.exportSelectedNotionMarkdown(),
+                    maskSensitiveValues.value
+                )
+            },
             onRename = { selectedSummary?.let { aliasDialogCard = it } },
             onClearSelected = topScreenViewModel::clearSelectedCardHistory,
             canCopy = selectedSummary != null,
@@ -1221,7 +1244,11 @@ private fun HistoryCard(
                         onClick = {},
                         label = {
                             Text(
-                                text = "No.${card.number ?: index}",
+                                text = if (LocalMaskSensitiveValues.current) {
+                                    "No.••••"
+                                } else {
+                                    "No.${card.number ?: index}"
+                                },
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -1613,6 +1640,8 @@ fun StatsScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val maskSensitiveValues = viewModel.maskSensitiveValues.observeAsState(false)
+    val statsText = viewModel.statsText(maskSensitiveValues.value)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1622,11 +1651,15 @@ fun StatsScreen(
         PageHeader(title = "統計", onBack = onBack)
         Text(
             modifier = Modifier.padding(top = 16.dp),
-            text = viewModel.statsText().ifBlank { "統計を表示できる履歴がありません" },
+            text = statsText.ifBlank { "統計を表示できる履歴がありません" },
             color = MaterialTheme.colorScheme.onBackground,
             style = MaterialTheme.typography.bodyLarge
         )
-        TextButton(onClick = { SensitiveClipboard.copy(context, viewModel.statsText()) }) {
+        TextButton(
+            onClick = {
+                SensitiveClipboard.copy(context, statsText, maskSensitiveValues.value)
+            }
+        ) {
             Text("統計をコピー")
         }
     }
@@ -1657,16 +1690,6 @@ fun SettingsScreen(
         }
         pendingBottomTabIconKind = null
     }
-    val backupSaveLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json")
-    ) { uri ->
-        uri?.let { writeBackupFile(context, it, viewModel.exportBackupJson()) }
-    }
-    val backupImportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        readBackupFile(context, uri)?.let(viewModel::importBackupJson)
-    }
     SettingsContent(
         appTitle = viewModel.appTitle.observeAsState("SuicaNFC KD").value,
         accentColorHex = viewModel.accentColorHex.observeAsState("#8AD7C8").value,
@@ -1683,6 +1706,7 @@ fun SettingsScreen(
         themeBackgroundDimAmount = viewModel.themeBackgroundDimAmount.observeAsState(42).value,
         bottomTabIconUris = viewModel.bottomTabIconUris.observeAsState(emptyMap()).value,
         widgetPrivacyMode = viewModel.widgetPrivacyMode.observeAsState(true).value,
+        maskSensitiveValues = viewModel.maskSensitiveValues.observeAsState(false).value,
         transparentContentSurfaces = viewModel.useTransparentContentSurfaces.observeAsState(false).value,
         useSearchIcon = viewModel.useSearchIcon.observeAsState(true).value,
         showLegacySearchBar = viewModel.showLegacySearchBar.observeAsState(false).value,
@@ -1721,6 +1745,7 @@ fun SettingsScreen(
         onClearThemeBackgroundImage = { viewModel.setThemeBackgroundImageUri(null) },
         onThemeBackgroundDimAmountChanged = viewModel::setThemeBackgroundDimAmount,
         onWidgetPrivacyModeChanged = viewModel::setWidgetPrivacyMode,
+        onMaskSensitiveValuesChanged = viewModel::setMaskSensitiveValues,
         onTransparentContentSurfacesChanged = viewModel::setUseTransparentContentSurfaces,
         onPickBottomTabIcon = { kind ->
             pendingBottomTabIconKind = kind
@@ -1745,9 +1770,8 @@ fun SettingsScreen(
         onShowGatePassageTimeChanged = viewModel::setShowGatePassageTime,
         onDemoModeChanged = viewModel::setDemoMode,
         onFeatureChanged = viewModel::setFeatureEnabled,
-        onExportBackup = { backupSaveLauncher.launch("suicanfc-kd-backup.json") },
-        onImportBackupFile = { backupImportLauncher.launch(arrayOf("application/json", "text/plain")) },
-        onImportBackup = viewModel::importBackupJson
+        onExportBackupJson = viewModel::exportBackupJson,
+        onImportBackupJson = viewModel::importBackupJson
     )
 }
 
@@ -1782,6 +1806,7 @@ private fun SettingsContent(
     themeBackgroundDimAmount: Int,
     bottomTabIconUris: Map<String, String?>,
     widgetPrivacyMode: Boolean,
+    maskSensitiveValues: Boolean,
     transparentContentSurfaces: Boolean,
     useSearchIcon: Boolean,
     showLegacySearchBar: Boolean,
@@ -1820,6 +1845,7 @@ private fun SettingsContent(
     onClearThemeBackgroundImage: () -> Unit,
     onThemeBackgroundDimAmountChanged: (Int) -> Unit,
     onWidgetPrivacyModeChanged: (Boolean) -> Unit,
+    onMaskSensitiveValuesChanged: (Boolean) -> Unit,
     onTransparentContentSurfacesChanged: (Boolean) -> Unit,
     onPickBottomTabIcon: (String) -> Unit,
     onClearBottomTabIcon: (String, String?) -> Unit,
@@ -1841,9 +1867,8 @@ private fun SettingsContent(
     onShowGatePassageTimeChanged: (Boolean) -> Unit,
     onDemoModeChanged: (Boolean) -> Unit,
     onFeatureChanged: (String, Boolean) -> Unit,
-    onExportBackup: () -> Unit,
-    onImportBackupFile: () -> Unit,
-    onImportBackup: (String) -> Boolean
+    onExportBackupJson: (String) -> String,
+    onImportBackupJson: (String, String) -> Boolean
 ) {
     var title by remember(appTitle) { mutableStateOf(appTitle) }
     var accent by remember(accentColorHex) { mutableStateOf(accentColorHex) }
@@ -1855,7 +1880,35 @@ private fun SettingsContent(
     var otherCardBackgroundColor by remember(otherCardBackgroundColorHex) { mutableStateOf(otherCardBackgroundColorHex) }
     var widgetBackgroundColor by remember(widgetBackgroundColorHex) { mutableStateOf(widgetBackgroundColorHex) }
     var backupText by remember { mutableStateOf("") }
+    var backupPassword by remember { mutableStateOf("") }
+    var showBackupPassword by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val backupSaveLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri != null) {
+            val encrypted = runCatching { onExportBackupJson(backupPassword) }.getOrNull()
+            val saved = encrypted != null && writeBackupFile(context, uri, encrypted)
+            message = if (saved) {
+                "暗号化バックアップを保存しました"
+            } else {
+                "バックアップの保存に失敗しました"
+            }
+        }
+    }
+    val backupImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val raw = readBackupFile(context, uri)
+            message = when {
+                raw == null -> "バックアップの読み込みに失敗しました"
+                onImportBackupJson(raw, backupPassword) -> "インポートしました"
+                else -> "インポートに失敗しました（パスワードまたはデータを確認）"
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -1979,6 +2032,21 @@ private fun SettingsContent(
                         checked = !widgetPrivacyMode,
                         onCheckedChange = { onWidgetPrivacyModeChanged(!it) }
                     )
+                }
+                item {
+                    Column {
+                        FeatureFlagRow(
+                            label = "残高・金額・カード番号をマスク表示（••••）",
+                            checked = maskSensitiveValues,
+                            onCheckedChange = onMaskSensitiveValuesChanged
+                        )
+                        Text(
+                            text = "ONの間は画面表示とコピー内容をマスクします。コピーした内容は貼り付けできません。",
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
                 item {
                     FeatureFlagRow(
@@ -2219,19 +2287,64 @@ private fun SettingsContent(
                     )
                 }
                 item {
+                    OutlinedTextField(
+                        modifier = Modifier.fillMaxWidth(),
+                        value = backupPassword,
+                        onValueChange = { backupPassword = it },
+                        label = { Text("バックアップのパスワード") },
+                        singleLine = true,
+                        visualTransformation = if (showBackupPassword) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        trailingIcon = {
+                            TextButton(onClick = { showBackupPassword = !showBackupPassword }) {
+                                Text(if (showBackupPassword) "隠す" else "表示")
+                            }
+                        }
+                    )
+                }
+                item {
+                    Text(
+                        text = "パスワードは${BackupCrypto.MIN_PASSWORD_LENGTH}文字以上です。新規バックアップは暗号化され、旧形式の平文バックアップは読み込めません。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                item {
                     Button(
                         onClick = {
-                            onExportBackup()
-                            message = "保存先を選択してください"
+                            if (backupPassword.length < BackupCrypto.MIN_PASSWORD_LENGTH) {
+                                message = "パスワードは${BackupCrypto.MIN_PASSWORD_LENGTH}文字以上にしてください"
+                            } else {
+                                backupSaveLauncher.launch("suicanfc-kd-backup-v1.8.3.suicanfc")
+                                message = "保存先を選択してください"
+                            }
                         },
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("バックアップをファイルに保存")
+                        Text("暗号化バックアップを保存")
                     }
                 }
                 item {
-                    OutlinedButton(onClick = onImportBackupFile, shape = RoundedCornerShape(8.dp)) {
-                        Text("バックアップファイルを読み込む")
+                    OutlinedButton(
+                        onClick = {
+                            if (backupPassword.length < BackupCrypto.MIN_PASSWORD_LENGTH) {
+                                message = "パスワードは${BackupCrypto.MIN_PASSWORD_LENGTH}文字以上にしてください"
+                            } else {
+                                backupImportLauncher.launch(
+                                    arrayOf(
+                                        "application/octet-stream",
+                                        "application/json",
+                                        "text/plain"
+                                    )
+                                )
+                            }
+                        },
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("暗号化バックアップを読み込む")
                     }
                 }
                 item {
@@ -2239,17 +2352,19 @@ private fun SettingsContent(
                         modifier = Modifier.fillMaxWidth(),
                         value = backupText,
                         onValueChange = { backupText = it },
-                        label = { Text("インポートJSON") },
+                        label = { Text("バックアップテキスト（暗号化）") },
                         minLines = 3
                     )
                 }
                 item {
                     Button(
                         onClick = {
-                            message = if (onImportBackup(backupText)) {
+                            message = if (backupPassword.length < BackupCrypto.MIN_PASSWORD_LENGTH) {
+                                "パスワードは${BackupCrypto.MIN_PASSWORD_LENGTH}文字以上にしてください"
+                            } else if (onImportBackupJson(backupText, backupPassword)) {
                                 "インポートしました"
                             } else {
-                                "インポートに失敗しました"
+                                "インポートに失敗しました（パスワードまたはデータを確認）"
                             }
                         },
                         shape = RoundedCornerShape(8.dp)
@@ -2302,7 +2417,9 @@ private fun String.featureLabel(): String =
         else -> this
     }
 
+@Composable
 private fun TransitHistoryRecord?.balanceText(): String {
+    if (LocalMaskSensitiveValues.current) return "¥••••"
     val balanceValue = this?.balance?.toIntOrNull()
     return if (balanceValue == null) {
         "¥--"
@@ -2311,7 +2428,9 @@ private fun TransitHistoryRecord?.balanceText(): String {
     }
 }
 
+@Composable
 private fun TransitHistoryRecord?.amountText(): String {
+    if (LocalMaskSensitiveValues.current) return "••••"
     val amountValue = this?.amount?.toIntOrNull()
     return if (amountValue == null) {
         "±--"
@@ -2322,6 +2441,7 @@ private fun TransitHistoryRecord?.amountText(): String {
 
 @Composable
 private fun TransitHistoryRecord?.amountColor(): Color {
+    if (LocalMaskSensitiveValues.current) return MaterialTheme.colorScheme.onSurfaceVariant
     val amountValue = this?.amount?.toIntOrNull() ?: return MaterialTheme.colorScheme.onSurfaceVariant
     return if (amountValue >= 0) Color(0xFF64D98A) else Color(0xFFFFB199)
 }
@@ -2435,7 +2555,8 @@ private fun readBackupFile(context: android.content.Context, uri: Uri?): String?
     require(
         mimeType == "application/json" ||
             mimeType == "text/json" ||
-            mimeType == "text/plain"
+            mimeType == "text/plain" ||
+            mimeType == "application/octet-stream"
     )
     val length = context.contentResolver.openAssetFileDescriptor(sourceUri, "r")?.use { it.length } ?: -1L
     require(length < 0 || length <= MAX_BACKUP_FILE_BYTES)
@@ -2486,7 +2607,7 @@ private fun isSafeImageUri(context: android.content.Context, uri: Uri): Boolean 
 }.getOrDefault(false)
 
 private const val MAX_BACKGROUND_IMAGE_BYTES = 20L * 1024L * 1024L
-private const val MAX_BACKUP_FILE_BYTES = 2 * 1024 * 1024
+private const val MAX_BACKUP_FILE_BYTES = 4 * 1024 * 1024
 private const val ARCHIVE_HEADER_BYTES = 8
 private const val MAX_BACKGROUND_IMAGE_DIMENSION = 8_192
 private const val MAX_BACKGROUND_IMAGE_PIXELS = 24_000_000L
