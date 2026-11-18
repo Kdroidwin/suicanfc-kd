@@ -34,6 +34,18 @@ class BalanceWidgetProvider : AppWidgetProvider() {
 
     internal fun buildViews(context: Context): RemoteViews {
         val prefs = SecurePreferences.open(context)
+        val privacyMode = prefs.getBoolean("widget_privacy_mode", true)
+        if (privacyMode) {
+            return RemoteViews("android", android.R.layout.simple_list_item_1).apply {
+                setTextViewText(android.R.id.text1, "交通系ICカード\n残高はアプリで確認してください")
+                setTextColor(android.R.id.text1, Color.WHITE)
+                setInt(
+                    android.R.id.text1,
+                    "setBackgroundColor",
+                    prefs.getString("widget_background_color", "#000000").toColorInt()
+                )
+            }
+        }
         val cards = runCatching {
             val array = JSONArray(prefs.getString("history", "[]") ?: "[]")
             List(array.length()) { index -> array.getJSONObject(index) }

@@ -2,7 +2,6 @@
 
 import android.app.Activity
 import android.graphics.Color.TRANSPARENT
-import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -51,6 +50,7 @@ import com.example.suicanfcreader.navigation.Screen
 import com.example.suicanfcreader.model.AppThemeMode
 import com.example.suicanfcreader.navigation.SuicaNFCReaderNavigation
 import com.example.suicanfcreader.ui.theme.SuicaNFCReaderTheme
+import com.example.suicanfcreader.util.BoundedImageDecoder
 import com.example.suicanfcreader.viewModel.TopScreenViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -152,14 +152,17 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
 }
 
 @Composable
-private fun rememberImageBitmap(context: android.content.Context, uriText: String?) =
-    produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, uriText) {
-        value = uriText?.let { text ->
-            runCatching {
-                context.contentResolver.openInputStream(Uri.parse(text))?.use(BitmapFactory::decodeStream)?.asImageBitmap()
-            }.getOrNull()
-        }
-    }.value
+private fun rememberImageBitmap(
+    context: android.content.Context,
+    uriText: String?,
+    maxDimension: Int = 2048
+) = produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, uriText, maxDimension) {
+    value = uriText?.let { text ->
+        runCatching {
+            BoundedImageDecoder.decode(context, Uri.parse(text), maxDimension)?.asImageBitmap()
+        }.getOrNull()
+    }
+}.value
 
 @Composable
 private fun SearchIcon() {
@@ -277,7 +280,7 @@ private fun AppNavigationBar(
 
 @Composable
 private fun NavigationIcon(uriText: String?, kind: String) {
-    val image = rememberImageBitmap(LocalContext.current.applicationContext, uriText)
+    val image = rememberImageBitmap(LocalContext.current.applicationContext, uriText, maxDimension = 256)
     if (image == null) {
         NavigationSymbol(kind)
     } else {
