@@ -199,6 +199,18 @@ class TopScreenViewModel(
         MutableLiveData(preferences.getBoolean(KEY_SHOW_BOTTOM_TAB_LABELS, true))
     val showBottomTabLabels: LiveData<Boolean> = _showBottomTabLabels
 
+    private val _floatingBottomNavigation =
+        MutableLiveData(preferences.getBoolean(KEY_FLOATING_BOTTOM_NAVIGATION, true))
+    val floatingBottomNavigation: LiveData<Boolean> = _floatingBottomNavigation
+
+    private val _blurBottomNavigation =
+        MutableLiveData(preferences.getBoolean(KEY_BLUR_BOTTOM_NAVIGATION, true))
+    val blurBottomNavigation: LiveData<Boolean> = _blurBottomNavigation
+
+    private val _adjustAppTitlePosition =
+        MutableLiveData(preferences.getBoolean(KEY_ADJUST_APP_TITLE_POSITION, true))
+    val adjustAppTitlePosition: LiveData<Boolean> = _adjustAppTitlePosition
+
     private val _showDeleteButton =
         MutableLiveData(preferences.getBoolean(KEY_SHOW_DELETE_BUTTON, true))
     val showDeleteButton: LiveData<Boolean> = _showDeleteButton
@@ -506,6 +518,21 @@ class TopScreenViewModel(
         _showBottomTabLabels.value = show
     }
 
+    fun setFloatingBottomNavigation(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_FLOATING_BOTTOM_NAVIGATION, enabled).apply()
+        _floatingBottomNavigation.value = enabled
+    }
+
+    fun setBlurBottomNavigation(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_BLUR_BOTTOM_NAVIGATION, enabled).apply()
+        _blurBottomNavigation.value = enabled
+    }
+
+    fun setAdjustAppTitlePosition(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_ADJUST_APP_TITLE_POSITION, enabled).apply()
+        _adjustAppTitlePosition.value = enabled
+    }
+
     fun setShowDeleteButton(show: Boolean) {
         preferences.edit().putBoolean(KEY_SHOW_DELETE_BUTTON, show).apply()
         _showDeleteButton.value = show
@@ -734,6 +761,9 @@ class TopScreenViewModel(
             put("showCardBalances", _showCardBalances.value ?: true)
             put("useModernUi", _useModernUi.value ?: true)
             put("showBottomTabLabels", _showBottomTabLabels.value ?: true)
+            put("floatingBottomNavigation", _floatingBottomNavigation.value ?: true)
+            put("blurBottomNavigation", _blurBottomNavigation.value ?: true)
+            put("adjustAppTitlePosition", _adjustAppTitlePosition.value ?: true)
             put("showDeleteButton", _showDeleteButton.value ?: true)
             put("showReadNotice", _showReadNotice.value ?: true)
             put("showStatisticsButton", _showStatisticsButton.value ?: true)
@@ -830,6 +860,9 @@ class TopScreenViewModel(
                 .putBoolean(KEY_SHOW_CARD_BALANCES, obj.optBoolean("showCardBalances", true))
                 .putBoolean(KEY_USE_MODERN_UI, obj.optBoolean("useModernUi", true))
                 .putBoolean(KEY_SHOW_BOTTOM_TAB_LABELS, obj.optBoolean("showBottomTabLabels", true))
+                .putBoolean(KEY_FLOATING_BOTTOM_NAVIGATION, obj.optBoolean("floatingBottomNavigation", true))
+                .putBoolean(KEY_BLUR_BOTTOM_NAVIGATION, obj.optBoolean("blurBottomNavigation", true))
+                .putBoolean(KEY_ADJUST_APP_TITLE_POSITION, obj.optBoolean("adjustAppTitlePosition", true))
                 .putBoolean(KEY_SHOW_DELETE_BUTTON, obj.optBoolean("showDeleteButton", true))
                 .putBoolean(KEY_SHOW_READ_NOTICE, obj.optBoolean("showReadNotice", true))
                 .putBoolean(KEY_SHOW_STATISTICS_BUTTON, obj.optBoolean("showStatisticsButton", true))
@@ -883,6 +916,9 @@ class TopScreenViewModel(
             _showCardBalances.value = preferences.getBoolean(KEY_SHOW_CARD_BALANCES, true)
             _useModernUi.value = preferences.getBoolean(KEY_USE_MODERN_UI, true)
             _showBottomTabLabels.value = preferences.getBoolean(KEY_SHOW_BOTTOM_TAB_LABELS, true)
+            _floatingBottomNavigation.value = preferences.getBoolean(KEY_FLOATING_BOTTOM_NAVIGATION, true)
+            _blurBottomNavigation.value = preferences.getBoolean(KEY_BLUR_BOTTOM_NAVIGATION, true)
+            _adjustAppTitlePosition.value = preferences.getBoolean(KEY_ADJUST_APP_TITLE_POSITION, true)
             _showDeleteButton.value = preferences.getBoolean(KEY_SHOW_DELETE_BUTTON, true)
             _showReadNotice.value = preferences.getBoolean(KEY_SHOW_READ_NOTICE, true)
             _showStatisticsButton.value = preferences.getBoolean(KEY_SHOW_STATISTICS_BUTTON, true)
@@ -1894,6 +1930,9 @@ class TopScreenViewModel(
         private const val KEY_SHOW_CARD_BALANCES = "show_card_balances"
         private const val KEY_USE_MODERN_UI = "use_modern_ui"
         private const val KEY_SHOW_BOTTOM_TAB_LABELS = "show_bottom_tab_labels"
+        private const val KEY_FLOATING_BOTTOM_NAVIGATION = "floating_bottom_navigation"
+        private const val KEY_BLUR_BOTTOM_NAVIGATION = "blur_bottom_navigation"
+        private const val KEY_ADJUST_APP_TITLE_POSITION = "adjust_app_title_position"
         private const val KEY_SHOW_DELETE_BUTTON = "show_delete_button"
         private const val KEY_SHOW_READ_NOTICE = "show_read_notice"
         private const val KEY_SHOW_STATISTICS_BUTTON = "show_statistics_button"

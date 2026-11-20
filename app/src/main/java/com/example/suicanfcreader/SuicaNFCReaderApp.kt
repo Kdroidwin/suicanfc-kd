@@ -6,12 +6,19 @@ import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -19,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -33,8 +41,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalView
@@ -67,6 +78,9 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
     val showMoreMenu = viewModel.showMoreMenu.observeAsState(true)
     val useModernUi = viewModel.useModernUi.observeAsState(true)
     val showBottomTabLabels = viewModel.showBottomTabLabels.observeAsState(true)
+    val floatingBottomNavigation = viewModel.floatingBottomNavigation.observeAsState(true)
+    val blurBottomNavigation = viewModel.blurBottomNavigation.observeAsState(true)
+    val adjustAppTitlePosition = viewModel.adjustAppTitlePosition.observeAsState(true)
     val themeBackgroundImageUri = viewModel.themeBackgroundImageUri.observeAsState().value
     val themeBackgroundDimAmount = viewModel.themeBackgroundDimAmount.observeAsState(42).value
     val bottomTabIconUris = viewModel.bottomTabIconUris.observeAsState(emptyMap()).value
@@ -100,7 +114,15 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
                     title = {
                         Text(
                             text = appTitle.value,
-                            modifier = Modifier.clickable { navController.navigate(Screen.Settings.route) }
+                            modifier = Modifier
+                                .then(
+                                    if (adjustAppTitlePosition.value) {
+                                        Modifier.offset(x = 8.dp, y = 4.dp)
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                                .clickable { navController.navigate(Screen.Settings.route) }
                         )
                     },
                     actions = {
@@ -128,11 +150,13 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
                 )
             },
             bottomBar = {
-                if (useModernUi.value) {
+                if (useModernUi.value && !floatingBottomNavigation.value) {
                     AppNavigationBar(
                         showLabels = showBottomTabLabels.value,
                         iconUris = bottomTabIconUris,
                         currentRoute = currentRoute,
+                        floating = false,
+                        blurEnabled = false,
                         onCards = {
                             navController.navigate(Screen.TopScreen.route) {
                                 popUpTo(Screen.TopScreen.route) { inclusive = false }
@@ -149,6 +173,24 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
                 navController = navController,
                 modifier = Modifier.padding(innerPadding),
                 viewModel
+            )
+        }
+        if (useModernUi.value && floatingBottomNavigation.value) {
+            AppNavigationBar(
+                modifier = Modifier.align(Alignment.BottomCenter),
+                showLabels = showBottomTabLabels.value,
+                iconUris = bottomTabIconUris,
+                currentRoute = currentRoute,
+                floating = true,
+                blurEnabled = blurBottomNavigation.value,
+                onCards = {
+                    navController.navigate(Screen.TopScreen.route) {
+                        popUpTo(Screen.TopScreen.route) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                },
+                onStats = { navController.navigate(Screen.Stats.route) },
+                onSettings = { navController.navigate(Screen.Settings.route) }
             )
         }
         }
@@ -251,6 +293,52 @@ private fun MoreMenu(
 
 @Composable
 private fun AppNavigationBar(
+    modifier: Modifier = Modifier,
+    showLabels: Boolean,
+    iconUris: Map<String, String?>,
+    currentRoute: String?,
+    floating: Boolean,
+    blurEnabled: Boolean,
+    onCards: () -> Unit,
+    onStats: () -> Unit,
+    onSettings: () -> Unit
+) {
+    if (floating) {
+        val surfaceColor = MaterialTheme.colorScheme.surface
+        val cornerRadius = 24.dp
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            NavigationBar(
+                modifier = Modifier
+                    .widthIn(max = 560.dp)
+                    .fillMaxWidth()
+                    .height(72.dp)
+                    .shadow(12.dp, RoundedCornerShape(cornerRadius))
+                    .clip(RoundedCornerShape(cornerRadius)),
+                containerColor = if (blurEnabled) surfaceColor.copy(alpha = 0.82f) else surfaceColor,
+                tonalElevation = 0.dp,
+                windowInsets = WindowInsets(0, 0, 0, 0)
+            ) {
+                AppNavigationItems(showLabels, iconUris, currentRoute, onCards, onStats, onSettings)
+            }
+        }
+    } else {
+        NavigationBar(
+            modifier = modifier,
+            containerColor = MaterialTheme.colorScheme.background
+        ) {
+            AppNavigationItems(showLabels, iconUris, currentRoute, onCards, onStats, onSettings)
+        }
+    }
+}
+
+@Composable
+private fun RowScope.AppNavigationItems(
     showLabels: Boolean,
     iconUris: Map<String, String?>,
     currentRoute: String?,
@@ -258,29 +346,37 @@ private fun AppNavigationBar(
     onStats: () -> Unit,
     onSettings: () -> Unit
 ) {
-    NavigationBar(containerColor = MaterialTheme.colorScheme.background) {
+    val itemColors = NavigationBarItemDefaults.colors(
+        selectedIconColor = MaterialTheme.colorScheme.primary,
+        selectedTextColor = MaterialTheme.colorScheme.primary,
+        indicatorColor = Color.Transparent,
+        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+    )
         NavigationBarItem(
             selected = currentRoute == Screen.TopScreen.route,
             onClick = onCards,
             icon = { NavigationIcon(iconUris["card"], "card") },
             label = if (showLabels) { { Text("カード") } } else null,
-            alwaysShowLabel = showLabels
+            alwaysShowLabel = showLabels,
+            colors = itemColors
         )
         NavigationBarItem(
             selected = currentRoute == Screen.Stats.route,
             onClick = onStats,
             icon = { NavigationIcon(iconUris["stats"], "stats") },
             label = if (showLabels) { { Text("統計") } } else null,
-            alwaysShowLabel = showLabels
+            alwaysShowLabel = showLabels,
+            colors = itemColors
         )
         NavigationBarItem(
             selected = currentRoute == Screen.Settings.route,
             onClick = onSettings,
             icon = { NavigationIcon(iconUris["settings"], "settings") },
             label = if (showLabels) { { Text("設定") } } else null,
-            alwaysShowLabel = showLabels
+            alwaysShowLabel = showLabels,
+            colors = itemColors
         )
-    }
 }
 
 @Composable
