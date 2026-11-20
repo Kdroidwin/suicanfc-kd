@@ -1713,6 +1713,9 @@ fun SettingsScreen(
         showCardBalances = viewModel.showCardBalances.observeAsState(true).value,
         useModernUi = viewModel.useModernUi.observeAsState(true).value,
         showBottomTabLabels = viewModel.showBottomTabLabels.observeAsState(true).value,
+        floatingBottomNavigation = viewModel.floatingBottomNavigation.observeAsState(true).value,
+        blurBottomNavigation = viewModel.blurBottomNavigation.observeAsState(true).value,
+        adjustAppTitlePosition = viewModel.adjustAppTitlePosition.observeAsState(true).value,
         showDeleteButton = viewModel.showDeleteButton.observeAsState(true).value,
         showReadNotice = viewModel.showReadNotice.observeAsState(true).value,
         showStatisticsButton = viewModel.showStatisticsButton.observeAsState(true).value,
@@ -1757,6 +1760,9 @@ fun SettingsScreen(
         onShowCardBalancesChanged = viewModel::setShowCardBalances,
         onUseModernUiChanged = viewModel::setUseModernUi,
         onShowBottomTabLabelsChanged = viewModel::setShowBottomTabLabels,
+        onFloatingBottomNavigationChanged = viewModel::setFloatingBottomNavigation,
+        onBlurBottomNavigationChanged = viewModel::setBlurBottomNavigation,
+        onAdjustAppTitlePositionChanged = viewModel::setAdjustAppTitlePosition,
         onShowDeleteButtonChanged = viewModel::setShowDeleteButton,
         onShowReadNoticeChanged = viewModel::setShowReadNotice,
         onShowStatisticsButtonChanged = viewModel::setShowStatisticsButton,
@@ -1813,6 +1819,9 @@ private fun SettingsContent(
     showCardBalances: Boolean,
     useModernUi: Boolean,
     showBottomTabLabels: Boolean,
+    floatingBottomNavigation: Boolean,
+    blurBottomNavigation: Boolean,
+    adjustAppTitlePosition: Boolean,
     showDeleteButton: Boolean,
     showReadNotice: Boolean,
     showStatisticsButton: Boolean,
@@ -1854,6 +1863,9 @@ private fun SettingsContent(
     onShowCardBalancesChanged: (Boolean) -> Unit,
     onUseModernUiChanged: (Boolean) -> Unit,
     onShowBottomTabLabelsChanged: (Boolean) -> Unit,
+    onFloatingBottomNavigationChanged: (Boolean) -> Unit,
+    onBlurBottomNavigationChanged: (Boolean) -> Unit,
+    onAdjustAppTitlePositionChanged: (Boolean) -> Unit,
     onShowDeleteButtonChanged: (Boolean) -> Unit,
     onShowReadNoticeChanged: (Boolean) -> Unit,
     onShowStatisticsButtonChanged: (Boolean) -> Unit,
@@ -1936,6 +1948,13 @@ private fun SettingsContent(
                     ) {
                         Text("アプリ名を保存")
                     }
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "左上のアプリ名を少し右下へ調整",
+                        checked = adjustAppTitlePosition,
+                        onCheckedChange = onAdjustAppTitlePositionChanged
+                    )
                 }
                 item {
                     EditField("アクセントカラー (#RRGGBB)", accent) { accent = it }
@@ -2186,6 +2205,28 @@ private fun SettingsContent(
                         checked = showBottomTabLabels,
                         onCheckedChange = onShowBottomTabLabelsChanged
                     )
+                }
+                item {
+                    FeatureFlagRow(
+                        label = "ボトムナビゲーションをフローティング表示",
+                        checked = floatingBottomNavigation,
+                        onCheckedChange = onFloatingBottomNavigationChanged
+                    )
+                }
+                item {
+                    Column {
+                        FeatureFlagRow(
+                            label = "ボトムナビゲーションを半透明にする",
+                            checked = blurBottomNavigation,
+                            onCheckedChange = onBlurBottomNavigationChanged
+                        )
+                        Text(
+                            text = "フローティング表示時に半透明のフロスト調で表示します。",
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
                 item {
                     FeatureFlagRow(
