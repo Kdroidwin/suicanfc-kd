@@ -86,6 +86,8 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
     val bottomTabIconUris = viewModel.bottomTabIconUris.observeAsState(emptyMap()).value
     val context = LocalContext.current.applicationContext
     val themeImage = rememberImageBitmap(context, themeBackgroundImageUri)
+    val hasVisibleThemeBackgroundImage =
+        themeMode.value == AppThemeMode.CUSTOM_IMAGE && themeImage != null
 
     CompositionLocalProvider(LocalMaskSensitiveValues provides maskSensitiveValues.value) {
     SuicaNFCReaderTheme(themeMode = themeMode.value, accentColorHex = accentColorHex.value) {
@@ -157,6 +159,7 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
                         currentRoute = currentRoute,
                         floating = false,
                         blurEnabled = false,
+                        backgroundImageVisible = false,
                         onCards = {
                             navController.navigate(Screen.TopScreen.route) {
                                 popUpTo(Screen.TopScreen.route) { inclusive = false }
@@ -183,6 +186,7 @@ fun SuicaNFCReaderApp(viewModel: TopScreenViewModel) {
                 currentRoute = currentRoute,
                 floating = true,
                 blurEnabled = blurBottomNavigation.value,
+                backgroundImageVisible = hasVisibleThemeBackgroundImage,
                 onCards = {
                     navController.navigate(Screen.TopScreen.route) {
                         popUpTo(Screen.TopScreen.route) { inclusive = false }
@@ -299,6 +303,7 @@ private fun AppNavigationBar(
     currentRoute: String?,
     floating: Boolean,
     blurEnabled: Boolean,
+    backgroundImageVisible: Boolean,
     onCards: () -> Unit,
     onStats: () -> Unit,
     onSettings: () -> Unit
@@ -320,7 +325,11 @@ private fun AppNavigationBar(
                     .height(72.dp)
                     .shadow(12.dp, RoundedCornerShape(cornerRadius))
                     .clip(RoundedCornerShape(cornerRadius)),
-                containerColor = if (blurEnabled) surfaceColor.copy(alpha = 0.82f) else surfaceColor,
+                containerColor = when {
+                    !blurEnabled -> surfaceColor
+                    backgroundImageVisible -> surfaceColor.copy(alpha = 0.28f)
+                    else -> surfaceColor.copy(alpha = 0.82f)
+                },
                 tonalElevation = 0.dp,
                 windowInsets = WindowInsets(0, 0, 0, 0)
             ) {
